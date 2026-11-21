@@ -2,10 +2,13 @@ using System.Diagnostics;
 using System.Reflection;
 using Microsoft.Win32;
 using MonitorSwitcher.Core;
+using MonitorSwitcher.Core.Controls;
 using MonitorSwitcher.Core.Ddc;
 using MonitorSwitcher.Core.Logging;
+using MonitorSwitcher.Core.Peer;
 using MonitorSwitcher.Core.Storage;
 using MonitorSwitcher.Core.Switching;
+using MonitorSwitcher.Windows.Peer;
 
 namespace MonitorSwitcher.App;
 
@@ -28,6 +31,12 @@ internal sealed class TrayContext : ApplicationContext
     private string? _discoveryError;
     private SettingsForm? _settingsForm;
     private SetupWizardForm? _wizardForm;
+    private MonitorActions _actions;
+    private UdpPeerListener? _listener;
+    private (int Port, bool Paired)? _listenerConfig;
+
+    /// <summary>Last known brightness/volume per monitor, in percent.</summary>
+    private Dictionary<string, Dictionary<MonitorControl, int>> _levels = [];
 
     public TrayContext(AppServices services, bool firstRun, bool openWizard)
     {
@@ -35,6 +44,7 @@ internal sealed class TrayContext : ApplicationContext
         _ui = new WindowsFormsSynchronizationContext();
         SynchronizationContext.SetSynchronizationContext(_ui);
         _settings = services.Settings.Load();
+        _actions = PeerFactory.Actions(services, _settings);
 
         _menu = new ContextMenuStrip { ShowCheckMargin = true, ShowImageMargin = false };
         _menu.Opening += (_, e) =>
@@ -76,6 +86,7 @@ internal sealed class TrayContext : ApplicationContext
         };
         SystemEvents.DisplaySettingsChanged += OnDisplaySettingsChanged;
 
+        ApplyPeerSettings();
         var hotkeyProblems = RegisterHotkeys();
         _ = StartAsync(firstRun, openWizard, hotkeyProblems);
     }
@@ -127,6 +138,52 @@ internal sealed class TrayContext : ApplicationContext
         var names = string.Join(", ", _monitors.Select(m => _settings.FindMonitor(m.StableId)?.Label ?? m.Name));
         var tip = names.Length == 0 ? "Monitor Switcher" : $"Monitor Switcher - {names}";
         _tray.Text = tip.Length > 127 ? tip[..124] + "..." : tip;
+        await RefreshLevelsAsync();
+    }
+
+    /// <summary>Reads brightness and volume of every monitor that answers (off the UI thread).</summary>
+    private async Task RefreshLevelsAsync()
+    {
+        var monitors = _monitors;
+        try
+        {
+            _levels = await Task.Run(() =>
+            {
+                var result = new Dictionary<string, Dictionary<MonitorControl, int>>();
+                foreach (var monitor in monitors)
+                {
+                    foreach (var control in MonitorControls.All.Where(c => Supports(monitor, c)))
+                    {
+                        if (_services.Switcher.ReadControl(monitor, control) is { } reading)
+                        {
+                            if (!result.TryGetValue(monitor.StableId, out var levels))
+                            {
+                                result[monitor.StableId] = levels = [];
+                            }
+                            levels[control] = ControlMath.Percent(reading);
+                        }
+                    }
+                }
+                return result;
+            });
+        }
+        catch (Exception ex)
+        {
+            _services.Log.Warn("Reading brightness and volume failed.", ex);
+        }
+    }
+
+    private static bool Supports(ResolvedMonitor monitor, MonitorControl control) =>
+        monitor.Capabilities is not { Vcp.Count: > 0 } caps || caps.SupportsVcp(control.VcpCode());
+
+    private int? Level(ResolvedMonitor monitor, MonitorControl control)
+    {
+        if (_levels.TryGetValue(monitor.StableId, out var levels) && levels.TryGetValue(control, out var percent))
+        {
+            return percent;
+        }
+        return _services.State.Load().Monitors.TryGetValue(monitor.StableId, out var state)
+            && state.Levels.TryGetValue(control.Name(), out var last) ? last : null;
     }
 
     private void OnDisplaySettingsChanged(object? sender, EventArgs e)
@@ -152,35 +209,73 @@ internal sealed class TrayContext : ApplicationContext
         }
     }
 
-    private async Task ExecuteAsync(string monitorId, HotkeyAction action, string? inputId)
+    private Task ExecuteAsync(string monitorId, HotkeyAction action, string? inputId)
+    {
+        if (action.ControlChange() is { } control)
+        {
+            return ChangeLevelAsync(monitorId, control.Control, control.Change);
+        }
+        return RunAsync(monitorId, (actions, monitor, ms) => action == HotkeyAction.Toggle
+            ? actions.Toggle(monitor, ms)
+            : actions.SwitchInput(monitor, inputId!, ms));
+    }
+
+    private Task ChangeLevelAsync(string monitorId, MonitorControl control, ControlChange change) =>
+        RunAsync(monitorId, (actions, monitor, _) => actions.SetControl(monitor, control, change));
+
+    /// <summary>Runs one action off the UI thread, one at a time, and reports the result.</summary>
+    private async Task RunAsync(string monitorId, Func<MonitorActions, ResolvedMonitor, MonitorSettings?, ActionResult> body)
     {
         if (!await _busy.WaitAsync(0))
         {
-            _services.Log.Debug("A switch is already running; ignored.");
+            _services.Log.Debug("An action is already running; ignored.");
             return;
         }
 
         var settings = _settings;
+        var actions = _actions;
         try
         {
-            var outcome = await Task.Run(() => Execute(settings, monitorId, action, inputId));
-            if (settings.NotifyOnSwitch)
+            var result = await Task.Run(() =>
             {
-                var ms = settings.FindMonitor(outcome.Monitor.StableId);
-                var label = ms?.LabelFor(outcome.InputId);
-                Notify(ms?.Label ?? outcome.Monitor.Name, label is null ? $"Switched to {outcome.InputName}" : $"Switched to {label} ({outcome.InputName})", ToolTipIcon.None);
+                var monitor = FindOrDiscover(settings, monitorId);
+                return body(actions, monitor, settings.FindMonitor(monitorId));
+            });
+            if (result.Control is { } control)
+            {
+                if (result.Percent is { } percent)
+                {
+                    if (!_levels.TryGetValue(monitorId, out var levels))
+                    {
+                        _levels[monitorId] = levels = [];
+                    }
+                    levels[control] = percent;
+                }
+            }
+            else if (settings.NotifyOnSwitch)
+            {
+                var ms = settings.FindMonitor(monitorId);
+                var name = result.InputName ?? result.InputId ?? "?";
+                var label = ms?.LabelFor(result.InputId ?? "");
+                var text = label is null ? $"Switched to {name}" : $"Switched to {label} ({name})";
+                Notify(ms?.Label ?? result.MonitorName, result.ViaPeer is null ? text : $"{text} by {result.ViaPeer}", ToolTipIcon.None);
             }
         }
         catch (DdcException ex)
         {
-            _services.Log.Warn($"Switch failed: {ex.Message}");
-            Notify(ex.Kind == DdcErrorKind.MonitorOnOtherInput ? "Monitor is showing another input" : "Could not switch", ex.UserMessage,
-                ex.Kind == DdcErrorKind.MonitorOnOtherInput ? ToolTipIcon.Info : ToolTipIcon.Warning);
+            _services.Log.Warn($"Action failed: {ex.Message}");
+            var title = ex.Kind switch
+            {
+                DdcErrorKind.MonitorOnOtherInput => "Monitor is showing another input",
+                DdcErrorKind.PeerUnavailable => "The other computer did not respond",
+                _ => "Could not do that",
+            };
+            Notify(title, ex.UserMessage, ex.Kind == DdcErrorKind.MonitorOnOtherInput ? ToolTipIcon.Info : ToolTipIcon.Warning);
         }
         catch (Exception ex)
         {
-            _services.Log.Error("Switch failed unexpectedly.", ex);
-            Notify("Could not switch", ex.Message, ToolTipIcon.Error);
+            _services.Log.Error("Action failed unexpectedly.", ex);
+            Notify("Could not do that", ex.Message, ToolTipIcon.Error);
         }
         finally
         {
@@ -189,7 +284,7 @@ internal sealed class TrayContext : ApplicationContext
     }
 
     /// <summary>Runs on a worker thread.</summary>
-    private SwitchOutcome Execute(AppSettings settings, string monitorId, HotkeyAction action, string? inputId)
+    private ResolvedMonitor FindOrDiscover(AppSettings settings, string monitorId)
     {
         var monitor = FindMonitor(monitorId);
         if (monitor is null)
@@ -200,11 +295,88 @@ internal sealed class TrayContext : ApplicationContext
                 DdcErrorKind.MonitorNotFound,
                 $"The monitor for this shortcut ({monitorId}) is not connected.");
         }
+        return monitor;
+    }
 
-        var monitorSettings = settings.FindMonitor(monitorId);
-        return action == HotkeyAction.Toggle
-            ? _services.Switcher.Toggle(monitor, monitorSettings)
-            : _services.Switcher.SwitchTo(monitor, inputId!, monitorSettings);
+    // ---- Other computer -----------------------------------------------------------------------
+
+    /// <summary>Rebuilds the actions (with or without relaying) and starts, restarts or stops the listener.</summary>
+    private void ApplyPeerSettings()
+    {
+        _actions = PeerFactory.Actions(_services, _settings);
+        var paired = _settings.Peer?.Key is not null;
+        var port = _settings.Peer?.EffectivePort ?? PeerSettings.DefaultPort;
+        if (_listenerConfig == (port, paired))
+        {
+            return;
+        }
+
+        _listener?.Dispose();
+        _listener = null;
+        _listenerConfig = (port, paired);
+        if (!paired)
+        {
+            return;
+        }
+
+        var actions = _actions;
+        var store = _services.Settings;
+        var listener = new UdpPeerListener(port, actions.Machine, _services.Log, () => store.Load().Peer?.Key, request =>
+        {
+            var reply = actions.Handle(request, store.Load());
+            _ui.Post(_ => PeerHandled(request, reply), null);
+            return reply;
+        });
+        try
+        {
+            listener.Start();
+            _listener = listener;
+        }
+        catch (DdcException ex)
+        {
+            listener.Dispose();
+            _services.Log.Warn($"Could not listen for the other computer: {ex.Message}");
+            Notify("Pairing is not working", ex.UserMessage, ToolTipIcon.Warning);
+        }
+    }
+
+    private void PeerHandled(PeerRequest request, PeerReply reply)
+    {
+        if (request.Kind == PeerRequestKind.Control && reply.Percent is { } percent
+            && MonitorControls.Named(request.Control) is { } control && request.Monitor?.Find(_monitors) is { } monitor)
+        {
+            if (!_levels.TryGetValue(monitor.StableId, out var levels))
+            {
+                _levels[monitor.StableId] = levels = [];
+            }
+            levels[control] = percent;
+        }
+        if (request.Kind == PeerRequestKind.Switch && reply.Ok && _settings.NotifyOnSwitch)
+        {
+            Notify($"Switched by {request.From}", reply.Message, ToolTipIcon.None);
+        }
+    }
+
+    /// <summary>Asks the other computer to answer, using a pairing code that may not be saved yet.</summary>
+    private async Task<string> TestPeerAsync(string code)
+    {
+        if (PeerKey.FromPairingCode(code) is not { } key)
+        {
+            return "That pairing code is not valid. Use \"New code\" on one computer and type the same code on the other.";
+        }
+        var port = _settings.Peer?.EffectivePort ?? PeerSettings.DefaultPort;
+        var machine = _actions.Machine;
+        try
+        {
+            var reply = await Task.Run(() =>
+                new MonitorActions(_services, machine, new UdpPeerChannel(key, port, _services.State, _services.Log)).Ping());
+            var address = _services.State.Load().Peer?.LastAddress;
+            return $"Connected: {reply.From}{(address is null ? "" : $" at {address}")} answered.";
+        }
+        catch (DdcException ex)
+        {
+            return ex.UserMessage;
+        }
     }
 
     // ---- Hotkeys --------------------------------------------------------------------------
@@ -242,7 +414,7 @@ internal sealed class TrayContext : ApplicationContext
     private string? HotkeyText(string monitorId, HotkeyAction action, string? inputId) =>
         _settings.Hotkeys.FirstOrDefault(h =>
             h.MonitorId == monitorId && h.Action == action
-            && (action == HotkeyAction.Toggle || string.Equals(h.InputId, inputId, StringComparison.OrdinalIgnoreCase)))?.Keys;
+            && (action != HotkeyAction.SwitchInput || string.Equals(h.InputId, inputId, StringComparison.OrdinalIgnoreCase)))?.Keys;
 
     // ---- Menu -----------------------------------------------------------------------------
 
@@ -301,6 +473,11 @@ internal sealed class TrayContext : ApplicationContext
                 _menu.Items.Add(toggle);
             }
 
+            foreach (var control in MonitorControls.All.Where(c => Supports(monitor, c)))
+            {
+                _menu.Items.Add(LevelMenu(monitor, control));
+            }
+
             if (monitor.NeedsSetup)
             {
                 var setup = new ToolStripMenuItem("Set up this monitor...");
@@ -320,6 +497,42 @@ internal sealed class TrayContext : ApplicationContext
 
     private static ToolStripMenuItem Disabled(string text) => new(text) { Enabled = false };
 
+    /// <summary>"Brightness  40%" submenu: step up/down (with shortcuts) and fixed levels.</summary>
+    private ToolStripMenuItem LevelMenu(ResolvedMonitor monitor, MonitorControl control)
+    {
+        var current = Level(monitor, control);
+        var menu = new ToolStripMenuItem(current is { } c ? $"{control.Name()}  {c}%" : control.Name());
+        if (menu.DropDown is ToolStripDropDownMenu dropDown)
+        {
+            dropDown.ShowCheckMargin = true;
+            dropDown.ShowImageMargin = false;
+        }
+        var (up, down) = control == MonitorControl.Brightness
+            ? (HotkeyAction.BrightnessUp, HotkeyAction.BrightnessDown)
+            : (HotkeyAction.VolumeUp, HotkeyAction.VolumeDown);
+        foreach (var action in new[] { up, down })
+        {
+            var step = new ToolStripMenuItem(action.DisplayName())
+            {
+                ShortcutKeyDisplayString = HotkeyText(monitor.StableId, action, null),
+            };
+            step.Click += (_, _) => _ = ExecuteAsync(monitor.StableId, action, null);
+            menu.DropDownItems.Add(step);
+        }
+        menu.DropDownItems.Add(new ToolStripSeparator());
+        for (int percent = 100; percent >= 0; percent -= 10)
+        {
+            var value = percent;
+            var item = new ToolStripMenuItem($"{value}%")
+            {
+                Checked = current is { } now && (int)Math.Round(now / 10.0, MidpointRounding.AwayFromZero) * 10 == value,
+            };
+            item.Click += (_, _) => _ = ChangeLevelAsync(monitor.StableId, control, ControlChange.Set(value));
+            menu.DropDownItems.Add(item);
+        }
+        return menu;
+    }
+
     private void ShowMenuAtCursor()
     {
         // NotifyIcon only exposes right-click menus; its private ShowContextMenu positions the
@@ -337,7 +550,7 @@ internal sealed class TrayContext : ApplicationContext
             return;
         }
 
-        _settingsForm = new SettingsForm(_services, _monitors, _settings, ApplySettings, OpenWizard, welcome);
+        _settingsForm = new SettingsForm(_services, _monitors, _settings, ApplySettings, OpenWizard, TestPeerAsync, welcome);
         _settingsForm.FormClosed += (_, _) =>
         {
             _settingsForm = null;
@@ -352,6 +565,7 @@ internal sealed class TrayContext : ApplicationContext
         var problems = new List<string>();
         _services.Settings.Save(updated);
         _settings = updated;
+        ApplyPeerSettings();
         try
         {
             StartupRegistration.Set(startAtLogin);
@@ -377,6 +591,7 @@ internal sealed class TrayContext : ApplicationContext
         _wizardForm = new SetupWizardForm(_services, _monitors, monitor, _settings, onSaved: async () =>
         {
             _settings = _services.Settings.Load();
+            ApplyPeerSettings();
             RegisterHotkeys();
             await RefreshMonitorsAsync();
         });
@@ -407,6 +622,7 @@ internal sealed class TrayContext : ApplicationContext
             SystemEvents.DisplaySettingsChanged -= OnDisplaySettingsChanged;
             _displayChangeDebounce.Dispose();
             _hotkeyWindow.Dispose();
+            _listener?.Dispose();
             _tray.Visible = false;
             _tray.Dispose();
             _menu.Dispose();

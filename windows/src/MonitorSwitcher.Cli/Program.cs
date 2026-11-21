@@ -1,11 +1,14 @@
 using System.Reflection;
 using MonitorSwitcher.Core;
+using MonitorSwitcher.Core.Controls;
 using MonitorSwitcher.Core.Ddc;
 using MonitorSwitcher.Core.Logging;
+using MonitorSwitcher.Core.Peer;
 using MonitorSwitcher.Core.Profiles;
 using MonitorSwitcher.Core.Storage;
 using MonitorSwitcher.Core.Switching;
 using MonitorSwitcher.Windows;
+using MonitorSwitcher.Windows.Peer;
 
 namespace MonitorSwitcher.Cli;
 
@@ -25,7 +28,8 @@ internal static class ExitCodes
     {
         DdcErrorKind.MonitorNotFound or DdcErrorKind.AmbiguousMonitor => MonitorNotFound,
         DdcErrorKind.NoSupportedTransport or DdcErrorKind.DriverMissing or DdcErrorKind.UnsupportedByTransport => NoTransport,
-        DdcErrorKind.MonitorNotResponding or DdcErrorKind.TransportFailure or DdcErrorKind.MonitorOnOtherInput => NotResponding,
+        DdcErrorKind.MonitorNotResponding or DdcErrorKind.TransportFailure or DdcErrorKind.MonitorOnOtherInput
+            or DdcErrorKind.PeerUnavailable => NotResponding,
         DdcErrorKind.InputNotInProfile => UnknownInput,
         DdcErrorKind.Configuration => NotConfigured,
         DdcErrorKind.SafetyViolation => Safety,
@@ -77,6 +81,8 @@ internal static class Program
                 Command.Input => Commands.Switch(services, options.Monitor, options.Input!, options.Quiet),
                 Command.Toggle => Commands.Toggle(services, options.Monitor, options.TogglePair, options.Quiet),
                 Command.ReadVcp => Commands.ReadVcp(services, options.Monitor, options.VcpCode),
+                Command.Control => Commands.Control(services, options.Monitor, options.Control, options.ControlChange, options.Quiet),
+                Command.TestPeer => Commands.TestPeer(services),
                 _ => ExitCodes.Usage,
             };
         }
@@ -106,12 +112,21 @@ internal static class Program
                   or your own label (Mac). Unique prefixes work too.
               monitorswitcher --toggle [<a>,<b>] [--monitor <monitor>]
                   Switch between two inputs (from Settings unless given).
+              monitorswitcher --brightness [<value>] [--monitor <monitor>]
+              monitorswitcher --volume [<value>] [--monitor <monitor>]
+                  Show or set brightness or speaker volume: 0-100, or +N / -N to step.
               monitorswitcher --list
                   Show monitors, their profiles and inputs.
               monitorswitcher --diagnose
                   Check GPU drivers, DDC/CI and profiles.
+              monitorswitcher --test-peer
+                  Check that the paired computer answers (Settings, Other computer).
               monitorswitcher --read-vcp <code> [--monitor <monitor>]
                   Read a VCP value (read-only), e.g. --read-vcp 0x60. For profile authors.
+
+            If the monitor only obeys the computer it is showing and this computer is
+            paired with the other one, --input, --toggle, --brightness and --volume ask
+            the other computer to do it.
 
             Options:
               -m, --monitor   Number from --list, name, label or id. Needed only when
@@ -147,11 +162,8 @@ internal static class Commands
         var monitorSettings = settings.FindMonitor(monitor.StableId);
         var input = InputResolver.Resolve(monitor.Profile, monitorSettings, inputQuery);
 
-        var outcome = services.Switcher.SwitchTo(monitor, input.Id, monitorSettings);
-        if (!quiet)
-        {
-            Console.WriteLine($"Switched {Label(monitor, settings)} to {Describe(outcome.InputId, outcome.InputName, monitorSettings)} via {outcome.Endpoint.Transport.Id} in {outcome.Elapsed.TotalMilliseconds:0} ms.");
-        }
+        var result = PeerFactory.Actions(services, settings).SwitchInput(monitor, input.Id, monitorSettings);
+        PrintResult(result, monitor, settings, monitorSettings, quiet);
         return ExitCodes.Ok;
     }
 
@@ -161,7 +173,7 @@ internal static class Commands
         var monitor = MonitorResolver.Resolve(services.Switcher.DiscoverMonitors(settings), settings, monitorQuery);
         var monitorSettings = settings.FindMonitor(monitor.StableId);
 
-        string target;
+        (string A, string B)? explicitPair = null;
         if (pair is not null)
         {
             var parts = pair.Split(',', StringSplitOptions.TrimEntries | StringSplitOptions.RemoveEmptyEntries);
@@ -169,23 +181,61 @@ internal static class Commands
             {
                 throw new DdcException(DdcErrorKind.Configuration, "--toggle takes two inputs separated by a comma, for example: --toggle hdmi2,usbc");
             }
-            var a = InputResolver.Resolve(monitor.Profile, monitorSettings, parts[0]).Id;
-            var b = InputResolver.Resolve(monitor.Profile, monitorSettings, parts[1]).Id;
-            services.State.Load().Monitors.TryGetValue(monitor.StableId, out var state);
-            target = ToggleLogic.NextInput(a, b, state?.LastInputId, monitorSettings?.LocalInputId,
-                monitor.Profile.EffectiveQuirks.IgnoresCommandsWhenInactive);
-        }
-        else
-        {
-            target = services.Switcher.ToggleTarget(monitor, monitorSettings);
+            explicitPair = (InputResolver.Resolve(monitor.Profile, monitorSettings, parts[0]).Id,
+                InputResolver.Resolve(monitor.Profile, monitorSettings, parts[1]).Id);
         }
 
-        var outcome = services.Switcher.SwitchTo(monitor, target, monitorSettings);
-        if (!quiet)
-        {
-            Console.WriteLine($"Switched {Label(monitor, settings)} to {Describe(outcome.InputId, outcome.InputName, monitorSettings)} via {outcome.Endpoint.Transport.Id} in {outcome.Elapsed.TotalMilliseconds:0} ms.");
-        }
+        var result = PeerFactory.Actions(services, settings).Toggle(monitor, monitorSettings, explicitPair);
+        PrintResult(result, monitor, settings, monitorSettings, quiet);
         return ExitCodes.Ok;
+    }
+
+    public static int Control(AppServices services, string? monitorQuery, MonitorControl control, ControlChange? change, bool quiet)
+    {
+        var settings = services.Settings.Load();
+        var monitor = MonitorResolver.Resolve(services.Switcher.DiscoverMonitors(settings), settings, monitorQuery);
+        if (change is not { } requested)
+        {
+            var reading = services.Switcher.ReadControl(monitor, control) ?? throw new DdcException(
+                DdcErrorKind.MonitorNotResponding,
+                $"{Label(monitor, settings)} did not report its {control.Name().ToLowerInvariant()}.",
+                monitor.Profile.EffectiveQuirks.IgnoresCommandsWhenInactive ? "It may be showing another input." : DdcHints.DdcCiDisabled);
+            Console.WriteLine($"{control.Name()} of {Label(monitor, settings)}: {ControlMath.Percent(reading)}% ({reading.Current} of {reading.Maximum})");
+            return ExitCodes.Ok;
+        }
+
+        var result = PeerFactory.Actions(services, settings).SetControl(monitor, control, requested);
+        PrintResult(result, monitor, settings, settings.FindMonitor(monitor.StableId), quiet);
+        return ExitCodes.Ok;
+    }
+
+    public static int TestPeer(AppServices services)
+    {
+        var settings = services.Settings.Load();
+        if (string.IsNullOrWhiteSpace(settings.Peer?.PairingCode))
+        {
+            throw new DdcException(DdcErrorKind.Configuration, "This computer is not paired.",
+                "Enter the same pairing code on both computers in Settings, Other computer.");
+        }
+        if (settings.Peer.Key is null)
+        {
+            throw new DdcException(DdcErrorKind.Configuration, "The pairing code in settings.json is not valid.",
+                "Create a new one in Settings, Other computer.");
+        }
+        var reply = PeerFactory.Actions(services, settings).Ping();
+        Console.WriteLine($"{reply.Message} ({services.State.Load().Peer?.LastAddress ?? "?"}, UDP port {settings.Peer.EffectivePort})");
+        return ExitCodes.Ok;
+    }
+
+    private static void PrintResult(ActionResult result, ResolvedMonitor monitor, AppSettings settings, MonitorSettings? ms, bool quiet)
+    {
+        if (quiet)
+        {
+            return;
+        }
+        Console.WriteLine(result.Control is { } control
+            ? $"{control.Name()} of {Label(monitor, settings)} is now {(result.Percent is { } p ? $"{p}%" : "changed")} {result.ViaText}."
+            : $"Switched {Label(monitor, settings)} to {Describe(result.InputId ?? "", result.InputName ?? "", ms)} {result.ViaText}.");
     }
 
     public static int ReadVcp(AppServices services, string? monitorQuery, byte code)
@@ -264,7 +314,7 @@ internal static class Commands
         Console.WriteLine(pair is { } p ? $"   Toggle:    {p.A} <-> {p.B}" : "   Toggle:    not set (choose two inputs in Settings)");
         if (m.Profile.EffectiveQuirks.IgnoresCommandsWhenInactive)
         {
-            Console.WriteLine("   Note:      this monitor only obeys the computer it is showing; each computer can switch it away, not back.");
+            Console.WriteLine("   Note:      this monitor only obeys the computer it is showing; each computer can switch it away, not back, unless the computers are paired.");
         }
         if (m.NeedsSetup)
         {

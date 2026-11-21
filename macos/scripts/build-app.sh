@@ -51,6 +51,7 @@ cat > "$APP/Contents/Info.plist" <<PLIST
     <key>LSMinimumSystemVersion</key><string>13.0</string>
     <key>LSUIElement</key><true/>
     <key>NSHighResolutionCapable</key><true/>
+    <key>NSLocalNetworkUsageDescription</key><string>Monitor Switcher talks to Monitor Switcher on your other computer, so either computer can switch the monitor you share.</string>
     <key>NSHumanReadableCopyright</key><string>Copyright (c) 2026 ashrash and contributors. MIT License.</string>
 </dict>
 </plist>

@@ -14,6 +14,9 @@ public sealed class AppSettings
 
     public bool NotifyOnSwitch { get; set; }
 
+    /// <summary>Pairing with the other computer that shares the monitor.</summary>
+    public PeerSettings? Peer { get; set; }
+
     public MonitorSettings? FindMonitor(string? monitorId) =>
         monitorId is null ? null : Monitors.FirstOrDefault(m => string.Equals(m.MonitorId, monitorId, StringComparison.OrdinalIgnoreCase));
 
@@ -60,6 +63,54 @@ public enum HotkeyAction
 {
     SwitchInput,
     Toggle,
+    BrightnessUp,
+    BrightnessDown,
+    VolumeUp,
+    VolumeDown,
+}
+
+public static class HotkeyActions
+{
+    public static readonly HotkeyAction[] ControlActions =
+        [HotkeyAction.BrightnessUp, HotkeyAction.BrightnessDown, HotkeyAction.VolumeUp, HotkeyAction.VolumeDown];
+
+    /// <summary>For brightness and volume actions: what to change and by how much.</summary>
+    public static (Controls.MonitorControl Control, Controls.ControlChange Change)? ControlChange(this HotkeyAction action) => action switch
+    {
+        HotkeyAction.BrightnessUp => (Controls.MonitorControl.Brightness, Controls.ControlChange.Adjust(Controls.ControlChange.Step)),
+        HotkeyAction.BrightnessDown => (Controls.MonitorControl.Brightness, Controls.ControlChange.Adjust(-Controls.ControlChange.Step)),
+        HotkeyAction.VolumeUp => (Controls.MonitorControl.Volume, Controls.ControlChange.Adjust(Controls.ControlChange.Step)),
+        HotkeyAction.VolumeDown => (Controls.MonitorControl.Volume, Controls.ControlChange.Adjust(-Controls.ControlChange.Step)),
+        _ => null,
+    };
+
+    public static string DisplayName(this HotkeyAction action) => action switch
+    {
+        HotkeyAction.SwitchInput => "Switch input",
+        HotkeyAction.Toggle => "Toggle",
+        HotkeyAction.BrightnessUp => "Brighter",
+        HotkeyAction.BrightnessDown => "Dimmer",
+        HotkeyAction.VolumeUp => "Louder",
+        HotkeyAction.VolumeDown => "Quieter",
+        _ => action.ToString(),
+    };
+}
+
+/// <summary>Pairing with the other computer (settings.json "peer"). Mirrors <c>PeerSettings</c> in Storage.swift.</summary>
+public sealed class PeerSettings
+{
+    public const int DefaultPort = 47823;
+
+    /// <summary>The same code on both computers, e.g. "K7QF-2M9X-HC4T-8WPA-R3NB". Empty means not paired.</summary>
+    public string? PairingCode { get; set; }
+
+    /// <summary>UDP port both computers listen on.</summary>
+    public int? Port { get; set; }
+
+    public int EffectivePort => Port is >= 1024 and <= 65535 ? Port.Value : DefaultPort;
+
+    /// <summary>The key for this pairing, or null when not paired or the code is not valid.</summary>
+    public Peer.PeerKey? Key => PairingCode is null ? null : Peer.PeerKey.FromPairingCode(PairingCode);
 }
 
 public sealed class HotkeyBinding

@@ -10,6 +10,9 @@ input command but obeys LG's own.
 
 - **Windows:** system tray app, global shortcuts, a setup wizard, and a `monitorswitcher` command for scripts.
 - **macOS (Apple Silicon):** menu bar app with the same features.
+- **Brightness and volume:** from the menu, with shortcuts, or from the command line.
+- **Either computer can switch:** pair the two computers and each one can bring the monitor back,
+  even if the monitor only obeys the computer it is showing.
 - **Small and fast:** no Electron. On Windows the tray app opens in about a third of a second and idles at about 12 MB of private memory.
 
 > **Status:** early (0.1). The Windows NVIDIA path and the LG 32UN880 profile are verified on
@@ -55,9 +58,21 @@ Macs doesn't pass DDC. See [macos/README.md](macos/README.md).
 
 Some monitors (the LG 32UN880 among them) **only obey the computer they are currently
 showing**. Your PC can switch the monitor to your Mac, but once the Mac is on screen, the PC's
-commands are ignored. Install Monitor Switcher on **both** computers and give each one a
-shortcut to the other. The setup wizard detects this behaviour, and the app tells you when it
+commands are ignored. The setup wizard detects this behaviour, and the app tells you when it
 applies.
+
+To switch from either computer, install Monitor Switcher on **both** and pair them:
+
+1. On one computer, open **Settings → Other computer** and click **New code**.
+2. Type the same code on the other computer, then click **Save** on both.
+3. Click **Test connection**. It should name the other computer.
+
+Now, when the monitor is showing the other computer, this one asks it to switch back. The
+toggle shortcut then means "come back here", and brightness and volume changes go through the
+other computer too. Both computers must be on the same local network, with Monitor Switcher
+running. The first time, allow it through the firewall: on Windows, allow private networks; on
+macOS, allow local network access. The computers talk over UDP port 47823, and every message is
+signed with a key from the pairing code. Details are in [spec/peer-protocol.md](spec/peer-protocol.md).
 
 ## Command line
 
@@ -70,6 +85,11 @@ monitorswitcher --input usbc            # by id
 monitorswitcher --input Mac             # by your own label
 monitorswitcher --toggle                # between the two toggle inputs from Settings
 monitorswitcher --toggle hdmi2,usbc
+monitorswitcher --brightness            # show brightness
+monitorswitcher --brightness 70         # set it (0-100)
+monitorswitcher --brightness +10        # step it; also -10
+monitorswitcher --volume 30             # speaker volume, same forms
+monitorswitcher --test-peer             # check the paired computer answers
 monitorswitcher --list                  # monitors, profiles, inputs
 monitorswitcher --diagnose              # drivers, DDC/CI health, profile problems
 monitorswitcher --read-vcp 0x60         # read-only, for profile authors
@@ -85,7 +105,7 @@ Exit codes:
 | 2 | Bad arguments |
 | 3 | Monitor not found, or ambiguous |
 | 4 | No supported GPU or driver |
-| 5 | The monitor did not accept the command |
+| 5 | The monitor, or the paired computer, did not accept the command |
 | 6 | Unknown input |
 | 7 | Not configured |
 | 8 | Blocked by a safety check |

@@ -21,6 +21,8 @@ internal sealed class FakeTransport(string id, bool raw, int priority = 10) : Dd
 
     public bool Answers { get; set; } = true;
 
+    public VcpReading Reading { get; set; } = new(50, 100);
+
     public override string Id => id;
 
     public override string DisplayName => $"Fake {id}";
@@ -52,7 +54,7 @@ internal sealed class FakeTransport(string id, bool raw, int priority = 10) : Dd
     }
 
     public override VcpReading? TryReadVcp(DisplayEndpoint endpoint, byte vcpCode) =>
-        Readable && Answers ? new VcpReading(50, 100) : null;
+        Readable && Answers ? Reading : null;
 }
 
 internal static class TestData

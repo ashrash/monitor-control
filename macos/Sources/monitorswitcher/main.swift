@@ -19,7 +19,7 @@ enum ExitCodes {
         switch kind {
         case .monitorNotFound, .ambiguousMonitor: return monitorNotFound
         case .noSupportedTransport, .driverMissing, .unsupportedByTransport: return noTransport
-        case .monitorNotResponding, .transportFailure, .monitorOnOtherInput: return notResponding
+        case .monitorNotResponding, .transportFailure, .monitorOnOtherInput, .peerUnavailable: return notResponding
         case .inputNotInProfile: return unknownInput
         case .configuration: return notConfigured
         case .safetyViolation: return safety
@@ -49,12 +49,21 @@ func printHelp() {
           or your own label (PC). Unique prefixes work too.
       monitorswitcher --toggle [<a>,<b>] [--monitor <monitor>]
           Switch between two inputs (from Settings unless given).
+      monitorswitcher --brightness [<value>] [--monitor <monitor>]
+      monitorswitcher --volume [<value>] [--monitor <monitor>]
+          Show or set brightness or speaker volume: 0-100, or +N / -N to step.
       monitorswitcher --list
           Show monitors, their profiles and inputs.
       monitorswitcher --diagnose
           Check DDC/CI access and profiles.
+      monitorswitcher --test-peer
+          Check that the paired computer answers (Settings, Other computer).
       monitorswitcher --read-vcp <code> [--monitor <monitor>]
           Read a VCP value (read-only), e.g. --read-vcp 0x60. For profile authors.
+
+    If the monitor only obeys the computer it is showing and this computer is
+    paired with the other one, --input, --toggle, --brightness and --volume ask
+    the other computer to do it.
 
     Options:
       -m, --monitor   Number from --list, name, label or id. Needed only when
@@ -92,15 +101,22 @@ enum Commands {
         return "\(origin), matched by \(how)"
     }
 
+    static func printResult(_ r: ActionResult, _ monitor: ResolvedMonitor, _ settings: AppSettings, _ ms: MonitorSettings?, quiet: Bool) {
+        guard !quiet else { return }
+        if let control = r.control {
+            print("\(control.displayName) of \(label(monitor, settings)) is now \(r.percent.map { "\($0)%" } ?? "changed") \(r.viaText).")
+        } else {
+            print("Switched \(label(monitor, settings)) to \(describe(r.inputId ?? "", r.inputName ?? "", ms)) \(r.viaText).")
+        }
+    }
+
     static func switchInput(_ services: AppServices, _ monitorQuery: String?, _ inputQuery: String, quiet: Bool) throws -> Int32 {
         let settings = services.settings.load()
         let monitor = try MonitorResolver.resolve(try services.switcher.discoverMonitors(settings: settings), settings, monitorQuery)
         let ms = settings.findMonitor(monitor.stableId)
         let input = try InputResolver.resolve(monitor.profile, ms, inputQuery)
-        let outcome = try services.switcher.switchTo(monitor, inputId: input.id, settings: ms)
-        if !quiet {
-            print("Switched \(label(monitor, settings)) to \(describe(outcome.inputId, outcome.inputName, ms)) via \(outcome.endpoint.transport.id) in \(Int(outcome.elapsed * 1000)) ms.")
-        }
+        let result = try MacPlatform.actions(services, settings: settings).switchInput(monitor, inputId: input.id, settings: ms)
+        printResult(result, monitor, settings, ms, quiet: quiet)
         return ExitCodes.ok
     }
 
@@ -109,25 +125,46 @@ enum Commands {
         let monitor = try MonitorResolver.resolve(try services.switcher.discoverMonitors(settings: settings), settings, monitorQuery)
         let ms = settings.findMonitor(monitor.stableId)
 
-        let target: String
+        var explicitPair: (a: String, b: String)?
         if let pair {
             let parts = pair.split(separator: ",").map { $0.trimmingCharacters(in: .whitespaces) }.filter { !$0.isEmpty }
             guard parts.count == 2 else {
                 throw DdcError(.configuration, "--toggle takes two inputs separated by a comma, for example: --toggle hdmi2,usbc")
             }
-            let a = try InputResolver.resolve(monitor.profile, ms, parts[0]).id
-            let b = try InputResolver.resolve(monitor.profile, ms, parts[1]).id
-            let last = services.state.load().monitors[monitor.stableId]?.lastInputId
-            target = ToggleLogic.nextInput(a, b, lastInputId: last, localInputId: ms?.localInputId,
-                                           ignoresCommandsWhenInactive: monitor.profile.effectiveQuirks.ignoresCommandsWhenInactive)
-        } else {
-            target = try services.switcher.toggleTarget(monitor, settings: ms)
+            explicitPair = (try InputResolver.resolve(monitor.profile, ms, parts[0]).id, try InputResolver.resolve(monitor.profile, ms, parts[1]).id)
         }
+        let result = try MacPlatform.actions(services, settings: settings).toggle(monitor, settings: ms, pair: explicitPair)
+        printResult(result, monitor, settings, ms, quiet: quiet)
+        return ExitCodes.ok
+    }
 
-        let outcome = try services.switcher.switchTo(monitor, inputId: target, settings: ms)
-        if !quiet {
-            print("Switched \(label(monitor, settings)) to \(describe(outcome.inputId, outcome.inputName, ms)) via \(outcome.endpoint.transport.id) in \(Int(outcome.elapsed * 1000)) ms.")
+    static func control(_ services: AppServices, _ monitorQuery: String?, _ control: MonitorControl, _ change: ControlChange?, quiet: Bool) throws -> Int32 {
+        let settings = services.settings.load()
+        let monitor = try MonitorResolver.resolve(try services.switcher.discoverMonitors(settings: settings), settings, monitorQuery)
+        guard let change else {
+            guard let reading = services.switcher.readControl(monitor, control) else {
+                throw DdcError(.monitorNotResponding, "\(label(monitor, settings)) did not report its \(control.displayName.lowercased()).",
+                               hint: monitor.profile.effectiveQuirks.ignoresCommandsWhenInactive ? "It may be showing another input." : DdcHints.ddcCiDisabled)
+            }
+            print("\(control.displayName) of \(label(monitor, settings)): \(ControlMath.percent(reading))% (\(reading.current) of \(reading.maximum))")
+            return ExitCodes.ok
         }
+        let result = try MacPlatform.actions(services, settings: settings).setControl(monitor, control, change)
+        printResult(result, monitor, settings, settings.findMonitor(monitor.stableId), quiet: quiet)
+        return ExitCodes.ok
+    }
+
+    static func testPeer(_ services: AppServices) throws -> Int32 {
+        let settings = services.settings.load()
+        guard let peer = settings.peer, let code = peer.pairingCode, !code.isEmpty else {
+            throw DdcError(.configuration, "This computer is not paired.", hint: "Enter the same pairing code on both computers in Settings, Other computer.")
+        }
+        guard peer.key != nil else {
+            throw DdcError(.configuration, "The pairing code in settings.json is not valid.", hint: "Create a new one in Settings, Other computer.")
+        }
+        let reply = try MacPlatform.actions(services, settings: settings).ping()
+        let address = services.state.load().peer?.lastAddress ?? "?"
+        print("\(reply.message) (\(address), UDP port \(peer.effectivePort))")
         return ExitCodes.ok
     }
 
@@ -185,7 +222,7 @@ enum Commands {
             print("   Toggle:    not set (choose two inputs in Settings)")
         }
         if m.profile.effectiveQuirks.ignoresCommandsWhenInactive {
-            print("   Note:      this monitor only obeys the computer it is showing; each computer can switch it away, not back.")
+            print("   Note:      this monitor only obeys the computer it is showing; each computer can switch it away, not back, unless the computers are paired.")
         }
         if m.needsSetup {
             print("   No profile matched this monitor; these are standard MCCS guesses. Run the setup wizard to confirm them.")
@@ -283,6 +320,8 @@ do {
     case .input: code = try Commands.switchInput(services, options.monitor, options.input ?? "", quiet: options.quiet)
     case .toggle: code = try Commands.toggle(services, options.monitor, options.togglePair, quiet: options.quiet)
     case .readVcp: code = try Commands.readVcp(services, options.monitor, options.vcpCode)
+    case .control: code = try Commands.control(services, options.monitor, options.control ?? .brightness, options.controlChange, quiet: options.quiet)
+    case .testPeer: code = try Commands.testPeer(services)
     case .none: code = ExitCodes.usage
     }
     exit(code)

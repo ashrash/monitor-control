@@ -1,5 +1,7 @@
 using System.Text.Json;
 using MonitorSwitcher.Core;
+using MonitorSwitcher.Core.Controls;
+using MonitorSwitcher.Core.Peer;
 using MonitorSwitcher.Core.Profiles;
 using MonitorSwitcher.Core.Storage;
 using MonitorSwitcher.Core.Switching;
@@ -26,6 +28,10 @@ internal sealed class SettingsForm : Form
     private readonly CheckBox _notify = new() { Text = "Show a notification after each switch", AutoSize = true };
     private readonly ComboBox _defaultMonitor = new() { DropDownStyle = ComboBoxStyle.DropDownList, Width = Ui.Px(380) };
     private readonly Label _status = Ui.Text("");
+    private readonly Dictionary<HotkeyAction, HotkeyBox> _controlHotkeys = HotkeyActions.ControlActions.ToDictionary(a => a, _ => new HotkeyBox());
+    private readonly TextBox _pairingCode = new() { Width = Ui.Px(260), PlaceholderText = "Same code on both computers", Font = new Font(FontFamily.GenericMonospace, 10f) };
+    private readonly Label _peerStatus = Ui.Text("", muted: true);
+    private readonly Func<string, Task<string>> _testPeer;
     private readonly List<InputRow> _rows = [];
     private ResolvedMonitor? _current;
     private bool _toggleTouched;
@@ -44,9 +50,11 @@ internal sealed class SettingsForm : Form
         AppSettings settings,
         Func<AppSettings, bool, IReadOnlyList<string>> apply,
         Action<ResolvedMonitor?> openWizard,
+        Func<string, Task<string>> testPeer,
         bool welcome)
     {
         _services = services;
+        _testPeer = testPeer;
         _monitors = monitors;
         _apply = apply;
         _openWizard = openWizard;
@@ -102,7 +110,51 @@ internal sealed class SettingsForm : Form
             toggleKeyRow.Controls.Add(new Label { Text = "Shortcut", AutoSize = true, Margin = Ui.Pad(0, 6, 6, 0) });
             toggleKeyRow.Controls.Add(_toggleHotkey);
             root.Controls.Add(toggleKeyRow);
+
+            root.Controls.Add(Ui.SectionHeader(Font, "Brightness and volume"));
+            var levels = new TableLayoutPanel { AutoSize = true, AutoSizeMode = AutoSizeMode.GrowAndShrink, ColumnCount = 2, Margin = Padding.Empty };
+            int levelRow = 0;
+            foreach (var (action, box) in _controlHotkeys)
+            {
+                levels.Controls.Add(new Label { Text = action.DisplayName(), AutoSize = true, Anchor = AnchorStyles.Left, Margin = Ui.Pad(0, 6, 12, 4) }, 0, levelRow);
+                box.Margin = Ui.Pad(0, 4, 0, 4);
+                levels.Controls.Add(box, 1, levelRow++);
+            }
+            root.Controls.Add(levels);
+            root.Controls.Add(Ui.Text($"Each press changes the level by {ControlChange.Step}%. Levels are also in the tray menu.", muted: true));
         }
+
+        root.Controls.Add(Ui.SectionHeader(Font, "Other computer"));
+        root.Controls.Add(Ui.Text("If your monitor only obeys the computer it is showing, pair this PC with the other computer that runs Monitor Switcher. Then either computer can switch the monitor, and change its brightness and volume, whichever one it is showing.", muted: true));
+        _pairingCode.Text = _working.Peer?.PairingCode ?? "";
+        var pairRow = new FlowLayoutPanel { AutoSize = true, WrapContents = false, Margin = Ui.Pad(0, 6, 0, 0) };
+        pairRow.Controls.Add(new Label { Text = "Pairing code", AutoSize = true, Margin = Ui.Pad(0, 6, 6, 0) });
+        pairRow.Controls.Add(_pairingCode);
+        pairRow.Controls.Add(Ui.Button("New code", (_, _) =>
+        {
+            _pairingCode.Text = PairingCode.Generate();
+            _peerStatus.Text = "Type this code into Monitor Switcher on the other computer, then Save on both.";
+        }));
+        pairRow.Controls.Add(Ui.Button("Copy", (_, _) =>
+        {
+            if (_pairingCode.Text.Length > 0)
+            {
+                Clipboard.SetText(_pairingCode.Text);
+            }
+        }));
+        root.Controls.Add(pairRow);
+        var testRow = new FlowLayoutPanel { AutoSize = true, WrapContents = false, Margin = Ui.Pad(0, 6, 0, 0) };
+        Button? testButton = null;
+        testButton = Ui.Button("Test connection", async (_, _) =>
+        {
+            testButton!.Enabled = false;
+            _peerStatus.Text = "Contacting the other computer...";
+            _peerStatus.Text = await _testPeer(_pairingCode.Text);
+            testButton.Enabled = true;
+        });
+        testRow.Controls.Add(testButton);
+        root.Controls.Add(testRow);
+        root.Controls.Add(_peerStatus);
 
         root.Controls.Add(Ui.SectionHeader(Font, "General"));
         _startAtLogin.Checked = StartupRegistration.IsEnabled() || welcome;
@@ -190,7 +242,7 @@ internal sealed class SettingsForm : Form
         _monitorNote.Text = monitor.NeedsSetup
             ? "No profile matched this monitor, so these are standard guesses. Run the setup wizard to find the codes that work."
             : monitor.Profile.EffectiveQuirks.IgnoresCommandsWhenInactive
-                ? "This monitor only obeys the computer it is showing. Shortcuts here can switch it away from this computer; to come back, use Monitor Switcher on the other computer or the monitor's buttons."
+                ? "This monitor only obeys the computer it is showing. Shortcuts here can switch it away from this computer. To switch back from here too, pair this PC with the other computer below."
                 : "";
         _monitorNote.Visible = _monitorNote.Text.Length > 0;
 
@@ -272,6 +324,11 @@ internal sealed class SettingsForm : Form
 
         var toggleBinding = _working.Hotkeys.FirstOrDefault(h => h.MonitorId == monitor.StableId && h.Action == HotkeyAction.Toggle);
         _toggleHotkey.Hotkey = toggleBinding is not null && Hotkey.TryParse(toggleBinding.Keys, out var thk) ? thk : null;
+        foreach (var (action, box) in _controlHotkeys)
+        {
+            var controlBinding = _working.Hotkeys.FirstOrDefault(h => h.MonitorId == monitor.StableId && h.Action == action);
+            box.Hotkey = controlBinding is not null && Hotkey.TryParse(controlBinding.Keys, out var chk) ? chk : null;
+        }
         _loading = false;
     }
 
@@ -332,6 +389,13 @@ internal sealed class SettingsForm : Form
         {
             _working.Hotkeys.Add(new HotkeyBinding { MonitorId = _current.StableId, Action = HotkeyAction.Toggle, Keys = toggle.ToString() });
         }
+        foreach (var (action, box) in _controlHotkeys)
+        {
+            if (box.Hotkey is { } hotkey)
+            {
+                _working.Hotkeys.Add(new HotkeyBinding { MonitorId = _current.StableId, Action = action, Keys = hotkey.ToString() });
+            }
+        }
     }
 
     private void Save()
@@ -341,6 +405,25 @@ internal sealed class SettingsForm : Form
         if (_defaultMonitor.SelectedItem is Choice def)
         {
             _working.DefaultMonitorId = def.Id;
+        }
+
+        var code = _pairingCode.Text.Trim();
+        if (code.Length == 0)
+        {
+            if (_working.Peer is not null)
+            {
+                _working.Peer.PairingCode = null;
+            }
+        }
+        else if (PairingCode.Normalize(code) is { } normalized)
+        {
+            _working.Peer ??= new PeerSettings();
+            _working.Peer.PairingCode = PairingCode.Format(normalized);
+        }
+        else
+        {
+            ShowStatus("The pairing code is not valid. Use \"New code\" and type the same code on the other computer.", error: true);
+            return;
         }
 
         var duplicate = _working.Hotkeys

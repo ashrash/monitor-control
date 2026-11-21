@@ -11,6 +11,7 @@ final class FakeTransport: DdcTransport {
     var failNext: [Error] = []
     var readable = false
     var answers = true
+    var reading = VcpReading(current: 50, maximum: 100)
 
     init(_ id: String, raw: Bool, priority: Int = 10) {
         transportId = id
@@ -44,7 +45,7 @@ final class FakeTransport: DdcTransport {
     }
 
     override func readVcp(_ endpoint: DisplayEndpoint, code: UInt8) -> VcpReading? {
-        readable && answers ? VcpReading(current: 50, maximum: 100) : nil
+        readable && answers ? reading : nil
     }
 }
 

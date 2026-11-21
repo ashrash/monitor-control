@@ -2,7 +2,7 @@ import Foundation
 import MonitorSwitcherCore
 
 enum Command {
-    case none, input, toggle, list, diagnose, readVcp
+    case none, input, toggle, list, diagnose, readVcp, control, testPeer
 }
 
 struct UsageError: Error {
@@ -16,6 +16,9 @@ struct Options {
     var monitor: String?
     var togglePair: String?
     var vcpCode: UInt8 = 0
+    var control: MonitorControl?
+    /// nil with `.control` means "print the current value".
+    var controlChange: ControlChange?
     var verbose = false
     var quiet = false
     var help = false
@@ -57,6 +60,22 @@ struct Options {
                     throw UsageError(message: "--read-vcp needs a VCP code such as 0x60, not '\(code)'.")
                 }
                 options.vcpCode = UInt8(value)
+            case "--brightness", "-b", "--volume":
+                try options.set(.control)
+                options.control = name == "--volume" ? .volume : .brightness
+                var text = inline
+                if text == nil, i + 1 < args.count, args[i + 1].range(of: #"^[+-]?\d+%?$"#, options: .regularExpression) != nil {
+                    i += 1
+                    text = args[i]
+                }
+                if let text {
+                    guard let change = ControlChange.parse(text) else {
+                        throw UsageError(message: "\(name) takes 0-100, or +N / -N to step, not '\(text)'.")
+                    }
+                    options.controlChange = change
+                }
+            case "--test-peer":
+                try options.set(.testPeer)
             case "--verbose", "-v":
                 options.verbose = true
             case "--quiet", "-q":
@@ -82,7 +101,7 @@ struct Options {
 
     private mutating func set(_ command: Command) throws {
         if self.command != .none && self.command != command {
-            throw UsageError(message: "Use only one of --input, --toggle, --list, --diagnose or --read-vcp.")
+            throw UsageError(message: "Use only one of --input, --toggle, --brightness, --volume, --list, --diagnose, --test-peer or --read-vcp.")
         }
         self.command = command
     }

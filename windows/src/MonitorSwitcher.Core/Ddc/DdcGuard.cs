@@ -1,3 +1,5 @@
+using MonitorSwitcher.Core.Controls;
+
 namespace MonitorSwitcher.Core.Ddc;
 
 /// <summary>
@@ -39,6 +41,19 @@ public static class DdcGuard
         {
             throw new DdcSafetyException(
                 $"Refused to send {frame}: source byte 0x{frame.SourceAddress:X2} is not one of 0x51 or 0x50.");
+        }
+    }
+
+    /// <summary>VCP codes the brightness/volume path may write. Input switching has its own path.</summary>
+    public static readonly IReadOnlyList<byte> ControlVcpCodes = [.. MonitorControls.All.Select(c => c.VcpCode())];
+
+    /// <summary>Brightness and volume writes: standard source byte and one of <see cref="ControlVcpCodes"/> only.</summary>
+    public static void EnsureControlFrame(in SetVcpFrame frame)
+    {
+        EnsureFrame(frame);
+        if (frame.SourceAddress != DdcConstants.StandardSourceAddress || !ControlVcpCodes.Contains(frame.VcpCode))
+        {
+            throw new DdcSafetyException($"Refused to send {frame}: only brightness (0x10) and volume (0x62) may be set this way.");
         }
     }
 
