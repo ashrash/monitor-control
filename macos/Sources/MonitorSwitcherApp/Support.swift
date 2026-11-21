@@ -36,21 +36,37 @@ final class WindowPresenter: NSObject, NSWindowDelegate {
     private var windows: [String: NSWindow] = [:]
     private var shouldClose: [String: () -> Bool] = [:]
 
-    func show<V: View>(id: String, title: String, view: V, shouldClose: (() -> Bool)? = nil) {
+    /// Shows a resizable window. It opens at `idealSize`, shrunk to fit the display it opens on
+    /// (the one with the pointer, i.e. the one whose menu bar was clicked), and centred there.
+    func show<V: View>(id: String, title: String, view: V,
+                       idealSize: CGSize, minSize: CGSize,
+                       shouldClose: (() -> Bool)? = nil) {
         if let existing = windows[id] {
             existing.makeKeyAndOrderFront(nil)
             NSApp.activate(ignoringOtherApps: true)
             return
         }
         let controller = NSHostingController(rootView: view)
-        controller.sizingOptions = .preferredContentSize
+        // The user, not the SwiftUI content, decides the window size.
+        controller.sizingOptions = []
         let window = NSWindow(contentViewController: controller)
         window.title = title
-        window.styleMask = [.titled, .closable, .miniaturizable]
+        window.styleMask = [.titled, .closable, .miniaturizable, .resizable]
         window.isReleasedWhenClosed = false
         window.identifier = NSUserInterfaceItemIdentifier(id)
         window.delegate = self
-        window.center()
+
+        let screen = Self.screenWithPointer() ?? NSScreen.main
+        let visible = screen?.visibleFrame ?? NSRect(x: 0, y: 0, width: 1280, height: 800)
+        // Leave a margin so the window never touches the menu bar, Dock or screen edges.
+        let maxContent = window.contentRect(forFrameRect: visible.insetBy(dx: 24, dy: 24)).size
+        let content = CGSize(width: min(idealSize.width, maxContent.width),
+                             height: min(idealSize.height, maxContent.height))
+        window.contentMinSize = CGSize(width: min(minSize.width, content.width),
+                                       height: min(minSize.height, content.height))
+        window.setContentSize(content)
+        let frame = window.frame
+        window.setFrameOrigin(NSPoint(x: visible.midX - frame.width / 2, y: visible.midY - frame.height / 2))
         windows[id] = window
         self.shouldClose[id] = shouldClose
         window.makeKeyAndOrderFront(nil)
@@ -67,6 +83,35 @@ final class WindowPresenter: NSObject, NSWindowDelegate {
     func bringToFront(_ id: String) {
         windows[id]?.makeKeyAndOrderFront(nil)
         NSApp.activate(ignoringOtherApps: true)
+    }
+
+    private static func screenWithPointer() -> NSScreen? {
+        let pointer = NSEvent.mouseLocation
+        return NSScreen.screens.first { NSMouseInRect(pointer, $0.frame, false) }
+    }
+
+    /// Shrinks a window that no longer fits, e.g. after it was dragged to a smaller display or the
+    /// display resolution changed.
+    private func fitToScreen(_ window: NSWindow) {
+        guard let visible = window.screen?.visibleFrame else { return }
+        var frame = window.frame
+        frame.size.width = min(frame.width, visible.width)
+        frame.size.height = min(frame.height, visible.height)
+        frame.origin.x = min(max(frame.minX, visible.minX), visible.maxX - frame.width)
+        frame.origin.y = min(max(frame.minY, visible.minY), visible.maxY - frame.height)
+        if frame != window.frame {
+            window.setFrame(frame, display: true, animate: false)
+        }
+    }
+
+    func windowDidChangeScreen(_ notification: Notification) {
+        guard let window = notification.object as? NSWindow else { return }
+        fitToScreen(window)
+    }
+
+    func windowDidChangeScreenProfile(_ notification: Notification) {
+        guard let window = notification.object as? NSWindow else { return }
+        fitToScreen(window)
     }
 
     func windowShouldClose(_ sender: NSWindow) -> Bool {

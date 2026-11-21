@@ -395,18 +395,25 @@ struct SetupWizardView: View {
     @ObservedObject var wizard: WizardModel
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 12) {
-            Text(wizard.title).font(.title2)
-            content
-            Spacer(minLength: 8)
+        VStack(alignment: .leading, spacing: 0) {
+            // The page scrolls when the window is shorter than its content; the buttons stay visible.
+            ScrollView {
+                VStack(alignment: .leading, spacing: 12) {
+                    Text(wizard.title).font(.title2)
+                    content
+                }
+                .padding(24)
+                .frame(maxWidth: .infinity, alignment: .leading)
+            }
+            Divider()
             HStack {
                 Spacer()
                 buttons
             }
+            .padding(.horizontal, 24)
+            .padding(.vertical, 16)
         }
-        .padding(24)
-        .frame(width: 560, alignment: .leading)
-        .frame(minHeight: 320)
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
     }
 
     @ViewBuilder

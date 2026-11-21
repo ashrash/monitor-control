@@ -190,7 +190,8 @@ final class AppModel: ObservableObject {
 
     func openSettings(welcome: Bool = false) {
         let draft = SettingsDraft(model: self, welcome: welcome)
-        windows.show(id: "settings", title: "Monitor Switcher Settings", view: SettingsView(model: self, draft: draft, welcome: welcome))
+        windows.show(id: "settings", title: "Monitor Switcher Settings", view: SettingsView(model: self, draft: draft, welcome: welcome),
+                     idealSize: CGSize(width: 640, height: 760), minSize: CGSize(width: 520, height: 360))
     }
 
     func openWizard(_ monitor: ResolvedMonitor?) {
@@ -199,7 +200,9 @@ final class AppModel: ObservableObject {
             return
         }
         let wizard = WizardModel(model: self, monitor: monitor)
-        windows.show(id: "wizard", title: "Set up a monitor", view: SetupWizardView(wizard: wizard), shouldClose: { [weak wizard] in
+        windows.show(id: "wizard", title: "Set up a monitor", view: SetupWizardView(wizard: wizard),
+                     idealSize: CGSize(width: 600, height: 560), minSize: CGSize(width: 480, height: 320),
+                     shouldClose: { [weak wizard] in
             wizard?.requestClose() ?? true
         })
     }
