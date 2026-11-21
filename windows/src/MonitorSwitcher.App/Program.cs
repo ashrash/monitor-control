@@ -3,6 +3,7 @@ using MonitorSwitcher.Core.Ddc;
 using MonitorSwitcher.Core.Logging;
 using MonitorSwitcher.Core.Switching;
 using MonitorSwitcher.Windows;
+using MonitorSwitcher.Windows.Peer;
 
 namespace MonitorSwitcher.App;
 
@@ -65,13 +66,14 @@ internal static class Program
             var settings = services.Settings.Load();
             var target = MonitorResolver.Resolve(services.Switcher.DiscoverMonitors(settings), settings, monitor);
             var monitorSettings = settings.FindMonitor(target.StableId);
+            var actions = PeerFactory.Actions(services, settings);
             if (toggle)
             {
-                services.Switcher.Toggle(target, monitorSettings);
+                actions.Toggle(target, monitorSettings);
             }
             else if (input is not null)
             {
-                services.Switcher.SwitchTo(target, InputResolver.Resolve(target.Profile, monitorSettings, input).Id, monitorSettings);
+                actions.SwitchInput(target, InputResolver.Resolve(target.Profile, monitorSettings, input).Id, monitorSettings);
             }
             return 0;
         }

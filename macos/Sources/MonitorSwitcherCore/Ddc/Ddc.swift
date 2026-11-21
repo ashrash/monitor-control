@@ -89,6 +89,8 @@ public enum DdcErrorKind: String {
     case safetyViolation
     case transportFailure
     case configuration
+    /// The paired computer did not answer, or refused the request.
+    case peerUnavailable
 }
 
 public struct DdcError: Error, LocalizedError, CustomStringConvertible {
@@ -118,6 +120,8 @@ public enum DdcHints {
         "Check that DDC/CI is turned on in the monitor's on-screen menu and that the cable carries DDC (most HDMI, DisplayPort and USB-C cables do; some adapters and docks do not)."
     public static let unsupportedPort =
         "On Apple Silicon, DDC/CI works over USB-C and DisplayPort; the built-in HDMI port of M1 and entry M2 Macs does not support it."
+    public static let otherInput =
+        "Pair this computer with the other one (Settings, Other computer) so it can switch back for you, or use the monitor's buttons."
 }
 
 /// The last line of defence before bytes reach a monitor. Mirrors `DdcGuard.cs`.
@@ -141,6 +145,17 @@ public enum DdcGuard {
     public static func ensureFrame(_ frame: SetVcpFrame) throws {
         guard allowedSourceAddresses.contains(frame.sourceAddress) else {
             throw DdcError.safety("Refused to send \(frame): source byte \(Hex.byte(frame.sourceAddress)) is not one of 0x51 or 0x50.")
+        }
+    }
+
+    /// VCP codes the brightness/volume path may write. Input switching has its own path.
+    public static let controlVcpCodes: [UInt8] = MonitorControl.allCases.map(\.vcpCode)
+
+    /// Brightness and volume writes: standard source byte and one of `controlVcpCodes` only.
+    public static func ensureControlFrame(_ frame: SetVcpFrame) throws {
+        try ensureFrame(frame)
+        guard frame.sourceAddress == DdcConstants.standardSourceAddress, controlVcpCodes.contains(frame.vcpCode) else {
+            throw DdcError.safety("Refused to send \(frame): only brightness (0x10) and volume (0x62) may be set this way.")
         }
     }
 

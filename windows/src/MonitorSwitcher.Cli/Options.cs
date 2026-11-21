@@ -1,3 +1,5 @@
+using MonitorSwitcher.Core.Controls;
+
 namespace MonitorSwitcher.Cli;
 
 internal enum Command
@@ -8,6 +10,8 @@ internal enum Command
     List,
     Diagnose,
     ReadVcp,
+    Control,
+    TestPeer,
 }
 
 internal sealed class UsageException(string message) : Exception(message);
@@ -25,6 +29,12 @@ internal sealed class Options
 
     /// <summary>VCP code for --read-vcp.</summary>
     public byte VcpCode { get; private set; }
+
+    /// <summary>Brightness or volume for --brightness / --volume.</summary>
+    public MonitorControl Control { get; private set; }
+
+    /// <summary>Null with <see cref="Command.Control"/> means "print the current value".</summary>
+    public ControlChange? ControlChange { get; private set; }
 
     public bool Verbose { get; private set; }
 
@@ -68,6 +78,22 @@ internal sealed class Options
                     }
                     options.VcpCode = (byte)vcp;
                     break;
+                case "--brightness" or "-b" or "--volume":
+                    options.SetCommand(Command.Control);
+                    options.Control = name == "--volume" ? MonitorControl.Volume : MonitorControl.Brightness;
+                    var text = inlineValue ?? (i + 1 < args.Count && LooksLikeLevel(args[i + 1]) ? args[++i] : null);
+                    if (text is not null)
+                    {
+                        if (!Core.Controls.ControlChange.TryParse(text, out var change))
+                        {
+                            throw new UsageException($"{name} takes 0-100, or +N / -N to step, not '{text}'.");
+                        }
+                        options.ControlChange = change;
+                    }
+                    break;
+                case "--test-peer":
+                    options.SetCommand(Command.TestPeer);
+                    break;
                 case "--verbose" or "-v":
                     options.Verbose = true;
                     break;
@@ -100,10 +126,14 @@ internal sealed class Options
     {
         if (Command != Command.None && Command != command)
         {
-            throw new UsageException("Use only one of --input, --toggle, --list, --diagnose or --read-vcp.");
+            throw new UsageException("Use only one of --input, --toggle, --brightness, --volume, --list, --diagnose, --test-peer or --read-vcp.");
         }
         Command = command;
     }
+
+    /// <summary>"70", "70%", "+10", "-10" (so "-10" is a value, not an option).</summary>
+    private static bool LooksLikeLevel(string arg) =>
+        System.Text.RegularExpressions.Regex.IsMatch(arg, @"^[+-]?\d+%?$");
 
     private static (string Name, string? Value) Split(string arg)
     {

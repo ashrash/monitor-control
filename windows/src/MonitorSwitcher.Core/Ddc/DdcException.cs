@@ -21,6 +21,8 @@ public enum DdcErrorKind
     SafetyViolation,
     TransportFailure,
     Configuration,
+    /// <summary>The paired computer did not answer, or refused the request.</summary>
+    PeerUnavailable,
 }
 
 public class DdcException : Exception
@@ -51,4 +53,7 @@ public static class DdcHints
 
     public const string UpdateDriver =
         "Install or update the graphics driver from the GPU vendor's website.";
+
+    public const string OtherInput =
+        "Pair this computer with the other one (Settings, Other computer) so it can switch back for you, or use the monitor's buttons.";
 }

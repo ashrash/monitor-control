@@ -52,3 +52,6 @@ another folder.
 - Some monitors, like the LG 32UN880, only obey the computer they are showing. Each computer can
   then switch the monitor away from itself, not back: run Monitor Switcher on both computers.
 - Hotkeys use Carbon's `RegisterEventHotKey`, so no Accessibility permission is needed.
+- Pairing with the other computer needs **Local Network** access (System Settings → Privacy &
+  Security → Local Network). macOS asks the first time the app talks to the other computer. If
+  the macOS firewall is on, also allow incoming connections for Monitor Switcher.

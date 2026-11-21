@@ -24,6 +24,7 @@
   <ItemGroup>
     <!-- Shared golden vectors and the raw profile files, so tests check exactly what ships. -->
     <None Include="..\..\..\spec\packet-vectors.json" Link="spec\packet-vectors.json" CopyToOutputDirectory="PreserveNewest" />
+    <None Include="..\..\..\spec\peer-vectors.json" Link="spec\peer-vectors.json" CopyToOutputDirectory="PreserveNewest" />
     <None Include="..\..\..\profiles\**\*.json" Link="profiles\%(RecursiveDir)%(Filename)%(Extension)" CopyToOutputDirectory="PreserveNewest" />
   </ItemGroup>
 

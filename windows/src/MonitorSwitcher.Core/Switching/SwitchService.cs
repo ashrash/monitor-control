@@ -1,4 +1,5 @@
 using System.Diagnostics;
+using MonitorSwitcher.Core.Controls;
 using MonitorSwitcher.Core.Ddc;
 using MonitorSwitcher.Core.Logging;
 using MonitorSwitcher.Core.Monitors;
@@ -25,6 +26,10 @@ public sealed class SwitchService(
     ILog log)
 {
     private static readonly TimeSpan BusTimeout = TimeSpan.FromSeconds(5);
+
+    /// <summary>Reads are tried this often before a monitor counts as not answering.</summary>
+    internal const int ReadAttempts = 2;
+    internal const int ReadRetryDelayMs = 100;
     private IReadOnlyList<TransportReport>? _reports;
 
     public ProfileCatalog Catalog => catalog;
@@ -263,7 +268,7 @@ public sealed class SwitchService(
             throw new DdcException(
                 DdcErrorKind.MonitorOnOtherInput,
                 $"{monitor.Name} is showing another input and ignores this computer until it is switched back.",
-                "Switch back from the other computer (Monitor Switcher runs on macOS too) or with the monitor's buttons.");
+                DdcHints.OtherInput);
         }
 
         var protocol = monitor.Protocol;
@@ -307,24 +312,99 @@ public sealed class SwitchService(
             return null;
         }
 
-        using (busLock.Acquire(BusTimeout))
+        // A monitor can miss a read right after a write, so one miss is not enough to decide that
+        // it is showing another computer (that decision can send a request to the other computer).
+        return Read(readers, 0x10) is not null;
+    }
+
+    /// <summary>First answer from any reader, trying <see cref="ReadAttempts"/> times.</summary>
+    private VcpReading? Read(IReadOnlyList<DisplayEndpoint> readers, byte vcpCode)
+    {
+        for (int attempt = 1; attempt <= ReadAttempts; attempt++)
         {
-            foreach (var endpoint in readers)
+            using (busLock.Acquire(BusTimeout))
             {
-                try
+                foreach (var endpoint in readers)
                 {
-                    if (endpoint.Transport.TryReadVcp(endpoint, 0x10) is not null)
+                    try
                     {
-                        return true;
+                        if (endpoint.Transport.TryReadVcp(endpoint, vcpCode) is { } reading)
+                        {
+                            return reading;
+                        }
+                    }
+                    catch (DdcException ex)
+                    {
+                        log.Debug($"Read through {endpoint.Transport.Id} failed: {ex.Message}");
                     }
                 }
-                catch (DdcException ex)
-                {
-                    log.Debug($"Read through {endpoint.Transport.Id} failed: {ex.Message}");
-                }
+            }
+            if (attempt < ReadAttempts)
+            {
+                Thread.Sleep(ReadRetryDelayMs);
             }
         }
-        return false;
+        return null;
+    }
+
+    // ---- Brightness and volume --------------------------------------------------------------
+
+    /// <summary>Current brightness or volume, or null when no transport can read it or the monitor did not answer.</summary>
+    public VcpReading? ReadControl(ResolvedMonitor monitor, MonitorControl control)
+    {
+        var readers = monitor.Endpoints.Where(e => e.Transport.SupportsReads).ToList();
+        return readers.Count == 0 ? null : Read(readers, control.VcpCode());
+    }
+
+    /// <summary>
+    /// Sets brightness or volume. A relative change needs the current value: read from the monitor,
+    /// else the last value this app set.
+    /// </summary>
+    public ControlOutcome SetControl(ResolvedMonitor monitor, MonitorControl control, ControlChange change)
+    {
+        var name = control.Name().ToLowerInvariant();
+        if (monitor.Capabilities is { } caps && caps.Vcp.Count > 0 && !caps.SupportsVcp(control.VcpCode()))
+        {
+            throw new DdcException(DdcErrorKind.UnsupportedByTransport, $"{monitor.Name} does not list {name} control (VCP 0x{control.VcpCode():X2}).");
+        }
+        var probe = new SetVcpFrame(DdcConstants.StandardSourceAddress, control.VcpCode(), 0);
+        var endpoint = monitor.Endpoints.FirstOrDefault(e => e.Transport.CanSend(probe)) ?? throw new DdcException(
+            DdcErrorKind.UnsupportedByTransport, $"No interface that can change {name} reaches {monitor.Name}.");
+
+        var reading = ReadControl(monitor, control);
+        int? current = reading is { } r ? ControlMath.Percent(r) : null;
+        if (current is null && stateStore.Load().Monitors.TryGetValue(monitor.StableId, out var known)
+            && known.Levels.TryGetValue(control.Name(), out var last))
+        {
+            current = last;
+        }
+        var percent = change.ApplyTo(current) ?? throw new DdcException(
+            DdcErrorKind.MonitorNotResponding,
+            $"{monitor.Name} did not report its current {name}, so it cannot be changed by a step.",
+            $"Choose a value instead, for example 50%. {DdcHints.DdcCiDisabled}");
+
+        var frame = new SetVcpFrame(DdcConstants.StandardSourceAddress, control.VcpCode(), ControlMath.Value(percent, reading?.Maximum ?? 100));
+        DdcGuard.EnsureControlFrame(frame);
+        using (busLock.Acquire(BusTimeout))
+        {
+            endpoint.Transport.Send(endpoint, frame);
+        }
+        log.Info($"Set {name} of {monitor.Name} [{monitor.StableId}] to {percent}% ({change}) via {endpoint.Transport.Id}: {frame}.");
+
+        try
+        {
+            stateStore.Update(s =>
+            {
+                var m = s.GetOrAdd(monitor.StableId);
+                m.Identity = monitor.Identity;
+                m.Levels[control.Name()] = percent;
+            });
+        }
+        catch (Exception ex)
+        {
+            log.Warn($"Could not save state after changing {name}.", ex);
+        }
+        return new ControlOutcome(monitor, control, percent, endpoint);
     }
 
     /// <summary>

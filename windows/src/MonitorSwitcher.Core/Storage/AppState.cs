@@ -10,6 +10,12 @@ public sealed class AppState
 {
     public Dictionary<string, MonitorState> Monitors { get; set; } = [];
 
+    /// <summary>Random id of this computer, so a computer ignores its own broadcast requests.</summary>
+    public string? MachineId { get; set; }
+
+    /// <summary>Where the paired computer last answered from.</summary>
+    public PeerState? Peer { get; set; }
+
     public MonitorState GetOrAdd(string monitorId)
     {
         if (!Monitors.TryGetValue(monitorId, out var state))
@@ -35,6 +41,19 @@ public sealed class MonitorState
 
     /// <summary>Cached DDC/CI capabilities string (reading it takes a second or two).</summary>
     public string? Capabilities { get; set; }
+
+    /// <summary>Last brightness/volume percentage this app set, keyed by control name ("Brightness").</summary>
+    public Dictionary<string, int> Levels { get; set; } = [];
+}
+
+/// <summary>Where the paired computer last answered from (state.json "peer").</summary>
+public sealed class PeerState
+{
+    public string? LastAddress { get; set; }
+
+    public string? LastName { get; set; }
+
+    public DateTimeOffset? LastSeenAt { get; set; }
 }
 
 /// <summary>Transport-specific address, e.g. transport "nvapi", address "0:0x100" (GPU index, output id).</summary>

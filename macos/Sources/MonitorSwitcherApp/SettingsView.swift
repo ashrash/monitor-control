@@ -1,3 +1,4 @@
+import AppKit
 import MonitorSwitcherCore
 import SwiftUI
 
@@ -41,6 +42,10 @@ final class SettingsDraft: ObservableObject {
         didSet { if !loading { toggleTouched = true } }
     }
     @Published var toggleHotkey: Hotkey?
+    @Published var controlHotkeys: [HotkeyAction: Hotkey] = [:]
+    @Published var pairingCode: String
+    @Published var peerStatus: String?
+    @Published var testingPeer = false
     @Published var launchAtLogin: Bool
     @Published var notify: Bool
     @Published var status: String?
@@ -50,6 +55,7 @@ final class SettingsDraft: ObservableObject {
         working = model.settings.copy()
         launchAtLogin = LoginItem.isEnabled || (welcome && AppInfo.isBundled)
         notify = working.notifyOnSwitch
+        pairingCode = working.peer?.pairingCode ?? ""
         if let first = model.monitors.first {
             loading = true
             selectedMonitorId = first.stableId
@@ -78,7 +84,7 @@ final class SettingsDraft: ObservableObject {
             return "No profile matched this monitor, so these are standard guesses. Run the setup wizard to find the codes that work."
         }
         if monitor.profile.effectiveQuirks.ignoresCommandsWhenInactive {
-            return "This monitor only obeys the computer it is showing. Shortcuts here can switch it away from this Mac; to come back, use Monitor Switcher on the other computer or the monitor's buttons."
+            return "This monitor only obeys the computer it is showing. Shortcuts here can switch it away from this Mac. To switch back from here too, pair this Mac with the other computer below."
         }
         return nil
     }
@@ -109,6 +115,14 @@ final class SettingsDraft: ObservableObject {
         }
         let toggleBinding = working.hotkeys.first { $0.monitorId == monitor.stableId && $0.action == .toggle }
         toggleHotkey = toggleBinding.flatMap { Hotkey.parse($0.keys) }
+        var controls: [HotkeyAction: Hotkey] = [:]
+        for action in HotkeyAction.controlActions {
+            if let binding = working.hotkeys.first(where: { $0.monitorId == monitor.stableId && $0.action == action }),
+               let hotkey = Hotkey.parse(binding.keys) {
+                controls[action] = hotkey
+            }
+        }
+        controlHotkeys = controls
     }
 
     /// Toggle between this Mac's input and the first verified other input.
@@ -149,12 +163,48 @@ final class SettingsDraft: ObservableObject {
         if let toggleHotkey {
             working.hotkeys.append(HotkeyBinding(monitorId: monitorId, action: .toggle, keys: toggleHotkey.storageString))
         }
+        for action in HotkeyAction.controlActions {
+            if let hotkey = controlHotkeys[action] {
+                working.hotkeys.append(HotkeyBinding(monitorId: monitorId, action: action, keys: hotkey.storageString))
+            }
+        }
+    }
+
+    func controlHotkey(_ action: HotkeyAction) -> Binding<Hotkey?> {
+        Binding(get: { self.controlHotkeys[action] }, set: { self.controlHotkeys[action] = $0 })
+    }
+
+    func newPairingCode() {
+        pairingCode = PairingCode.generate()
+        peerStatus = "Type this code into Monitor Switcher on the other computer, then Save on both."
+    }
+
+    func testPeer() {
+        testingPeer = true
+        peerStatus = "Contacting the other computer…"
+        let code = pairingCode
+        Task {
+            peerStatus = await model.testPeer(code: code)
+            testingPeer = false
+        }
     }
 
     /// Returns true when the window can close.
     func save() -> Bool {
         store()
         working.notifyOnSwitch = notify
+
+        let code = pairingCode.trimmingCharacters(in: .whitespaces)
+        if code.isEmpty {
+            working.peer?.pairingCode = nil
+        } else if let normalized = PairingCode.normalize(code) {
+            let peer = working.peer ?? PeerSettings()
+            peer.pairingCode = PairingCode.format(normalized)
+            working.peer = peer
+        } else {
+            status = "The pairing code is not valid. Use \"New code\" and type the same code on the other computer."
+            return false
+        }
 
         var seen = Set<String>()
         for binding in working.hotkeys where !seen.insert(binding.keys.lowercased()).inserted {
@@ -202,7 +252,10 @@ struct SettingsView: View {
                     monitorSection
                     inputsSection
                     toggleSection
+                    levelsSection
                 }
+
+                peerSection
 
                 Section("General") {
                     Toggle("Launch Monitor Switcher at login", isOn: $draft.launchAtLogin)
@@ -282,6 +335,49 @@ struct SettingsView: View {
                 Text("Not set").tag(String?.none)
                 ForEach(draft.rows) { row in
                     Text(row.portName).tag(String?.some(row.id))
+                }
+            }
+        }
+    }
+
+    private var levelsSection: some View {
+        Section("Brightness and volume") {
+            ForEach(HotkeyAction.controlActions, id: \.self) { action in
+                LabeledContent(action.displayName) {
+                    KeyRecorder(hotkey: draft.controlHotkey(action))
+                        .frame(width: 150, height: 22)
+                }
+            }
+            Text("Each press changes the level by \(ControlChange.step)%. Levels are also in the menu bar menu.")
+                .font(.callout)
+                .foregroundStyle(.secondary)
+        }
+    }
+
+    private var peerSection: some View {
+        Section("Other computer") {
+            Text("If your monitor only obeys the computer it is showing, pair this Mac with the other computer that runs Monitor Switcher. Then either computer can switch the monitor, and change its brightness and volume, whichever one it is showing.")
+                .font(.callout)
+                .foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+            HStack {
+                TextField("Pairing code", text: $draft.pairingCode, prompt: Text("Same code on both computers"))
+                    .font(.body.monospaced())
+                Button("New code") { draft.newPairingCode() }
+                Button("Copy") {
+                    NSPasteboard.general.clearContents()
+                    NSPasteboard.general.setString(draft.pairingCode, forType: .string)
+                }
+                .disabled(draft.pairingCode.isEmpty)
+            }
+            HStack {
+                Button("Test connection") { draft.testPeer() }
+                    .disabled(draft.pairingCode.isEmpty || draft.testingPeer)
+                if let status = draft.peerStatus {
+                    Text(status)
+                        .font(.callout)
+                        .foregroundStyle(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
                 }
             }
         }

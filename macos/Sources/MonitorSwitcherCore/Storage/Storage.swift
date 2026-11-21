@@ -142,9 +142,11 @@ public final class AppSettings: Codable {
     public var monitors: [MonitorSettings] = []
     public var hotkeys: [HotkeyBinding] = []
     public var notifyOnSwitch: Bool = false
+    /// Pairing with the other computer that shares the monitor.
+    public var peer: PeerSettings?
 
     enum CodingKeys: String, CodingKey {
-        case version, defaultMonitorId, monitors, hotkeys, notifyOnSwitch
+        case version, defaultMonitorId, monitors, hotkeys, notifyOnSwitch, peer
     }
 
     public init() {}
@@ -156,6 +158,7 @@ public final class AppSettings: Codable {
         monitors = try c.decodeIfPresent([MonitorSettings].self, forKey: .monitors) ?? []
         hotkeys = try c.decodeIfPresent([HotkeyBinding].self, forKey: .hotkeys) ?? []
         notifyOnSwitch = try c.decodeIfPresent(Bool.self, forKey: .notifyOnSwitch) ?? false
+        peer = try c.decodeIfPresent(PeerSettings.self, forKey: .peer)
     }
 
     public func findMonitor(_ monitorId: String?) -> MonitorSettings? {
@@ -217,6 +220,34 @@ public final class MonitorSettings: Codable {
 public enum HotkeyAction: String, Codable {
     case switchInput = "SwitchInput"
     case toggle = "Toggle"
+    case brightnessUp = "BrightnessUp"
+    case brightnessDown = "BrightnessDown"
+    case volumeUp = "VolumeUp"
+    case volumeDown = "VolumeDown"
+
+    public static let controlActions: [HotkeyAction] = [.brightnessUp, .brightnessDown, .volumeUp, .volumeDown]
+
+    /// For brightness and volume actions: what to change and by how much.
+    public var controlChange: (control: MonitorControl, change: ControlChange)? {
+        switch self {
+        case .brightnessUp: return (.brightness, .adjust(ControlChange.step))
+        case .brightnessDown: return (.brightness, .adjust(-ControlChange.step))
+        case .volumeUp: return (.volume, .adjust(ControlChange.step))
+        case .volumeDown: return (.volume, .adjust(-ControlChange.step))
+        case .switchInput, .toggle: return nil
+        }
+    }
+
+    public var displayName: String {
+        switch self {
+        case .switchInput: return "Switch input"
+        case .toggle: return "Toggle"
+        case .brightnessUp: return "Brighter"
+        case .brightnessDown: return "Dimmer"
+        case .volumeUp: return "Louder"
+        case .volumeDown: return "Quieter"
+        }
+    }
 }
 
 public struct HotkeyBinding: Codable, Equatable {
@@ -238,14 +269,20 @@ public struct HotkeyBinding: Codable, Equatable {
 /// Machine state the app learns as it runs (state.json), shared by the app and the CLI.
 public final class AppState: Codable {
     public var monitors: [String: MonitorState] = [:]
+    /// Random id of this computer, so a computer ignores its own broadcast requests.
+    public var machineId: String?
+    /// Where the paired computer last answered from.
+    public var peer: PeerState?
 
-    enum CodingKeys: String, CodingKey { case monitors }
+    enum CodingKeys: String, CodingKey { case monitors, machineId, peer }
 
     public init() {}
 
     public required init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
         monitors = try c.decodeIfPresent([String: MonitorState].self, forKey: .monitors) ?? [:]
+        machineId = try c.decodeIfPresent(String.self, forKey: .machineId)
+        peer = try? c.decodeIfPresent(PeerState.self, forKey: .peer)
     }
 
     public func getOrAdd(_ monitorId: String) -> MonitorState {
@@ -265,9 +302,11 @@ public final class MonitorState: Codable {
     public var identity: MonitorIdentity?
     /// Cached DDC/CI capabilities string.
     public var capabilities: String?
+    /// Last brightness/volume percentage this app set, keyed by `MonitorControl` raw value.
+    public var levels: [String: Int] = [:]
 
     enum CodingKeys: String, CodingKey {
-        case lastInputId, lastSwitchedAt, lastEndpoint, identity, capabilities
+        case lastInputId, lastSwitchedAt, lastEndpoint, identity, capabilities, levels
     }
 
     public init() {}
@@ -279,6 +318,7 @@ public final class MonitorState: Codable {
         lastEndpoint = try c.decodeIfPresent(EndpointRecord.self, forKey: .lastEndpoint)
         identity = try c.decodeIfPresent(MonitorIdentity.self, forKey: .identity)
         capabilities = try c.decodeIfPresent(String.self, forKey: .capabilities)
+        levels = (try? c.decodeIfPresent([String: Int].self, forKey: .levels)) ?? [:]
     }
 }
 
@@ -290,5 +330,54 @@ public struct EndpointRecord: Codable, Equatable {
     public init(transport: String, address: String) {
         self.transport = transport
         self.address = address
+    }
+}
+
+/// Pairing with the other computer (settings.json "peer"). Mirrors `PeerSettings.cs`.
+public final class PeerSettings: Codable {
+    /// The same code on both computers, e.g. "K7QF-2M9X-HC4T-8WPA-R3NB". Empty means not paired.
+    public var pairingCode: String?
+    /// UDP port both computers listen on.
+    public var port: Int?
+
+    public static let defaultPort = 47823
+
+    enum CodingKeys: String, CodingKey { case pairingCode, port }
+
+    public init(pairingCode: String? = nil, port: Int? = nil) {
+        self.pairingCode = pairingCode
+        self.port = port
+    }
+
+    public required init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        pairingCode = try c.decodeIfPresent(String.self, forKey: .pairingCode)
+        port = try c.decodeIfPresent(Int.self, forKey: .port)
+    }
+
+    public var effectivePort: UInt16 {
+        guard let port, (1024...65535).contains(port) else { return UInt16(PeerSettings.defaultPort) }
+        return UInt16(port)
+    }
+
+    /// The key for this pairing, or nil when not paired or the code is not valid.
+    public var key: PeerKey? { pairingCode.flatMap(PeerKey.init(pairingCode:)) }
+}
+
+/// Where the paired computer last answered from (state.json "peer").
+public final class PeerState: Codable {
+    public var lastAddress: String?
+    public var lastName: String?
+    public var lastSeenAt: Date?
+
+    enum CodingKeys: String, CodingKey { case lastAddress, lastName, lastSeenAt }
+
+    public init() {}
+
+    public required init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        lastAddress = try c.decodeIfPresent(String.self, forKey: .lastAddress)
+        lastName = try c.decodeIfPresent(String.self, forKey: .lastName)
+        lastSeenAt = try? c.decodeIfPresent(Date.self, forKey: .lastSeenAt)
     }
 }

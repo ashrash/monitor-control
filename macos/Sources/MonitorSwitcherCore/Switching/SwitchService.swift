@@ -11,6 +11,9 @@ public struct TransportReport {
 /// protocol's candidate list, before anything is sent.
 public final class SwitchService {
     private static let busTimeout: TimeInterval = 5
+    /// Reads are tried this often before a monitor counts as not answering.
+    static let readAttempts = 2
+    static let readRetryDelay: TimeInterval = 0.1
 
     private let transports: [DdcTransport]
     public private(set) var catalog: ProfileCatalog
@@ -212,7 +215,7 @@ public final class SwitchService {
            isAnswering(monitor) == false {
             throw DdcError(.monitorOnOtherInput,
                            "\(monitor.name) is showing another input and ignores this computer until it is switched back.",
-                           hint: "Switch back from the other computer (Monitor Switcher runs on Windows and macOS) or with the monitor's buttons.")
+                           hint: DdcHints.otherInput)
         }
 
         let outcome = try deliver(monitor, monitor.inputProtocol, input.codeValue, monitor.profile.effectiveQuirks, input.id, input.name)
@@ -241,14 +244,81 @@ public final class SwitchService {
     public func isAnswering(_ monitor: ResolvedMonitor) -> Bool? {
         let readers = monitor.endpoints.filter { $0.transport.supportsReads }
         if readers.isEmpty { return nil }
+        // A monitor can miss a read right after a write, so one miss is not enough to decide that
+        // it is showing another computer (that decision can send a request to the other computer).
+        for attempt in 1...SwitchService.readAttempts {
+            do {
+                let answered = try busLock.withLock(timeout: SwitchService.busTimeout) {
+                    readers.contains { $0.transport.readVcp($0, code: 0x10) != nil }
+                }
+                if answered { return true }
+            } catch {
+                log.debug("Read failed: \(error)")
+            }
+            if attempt < SwitchService.readAttempts { Thread.sleep(forTimeInterval: SwitchService.readRetryDelay) }
+        }
+        return false
+    }
+
+    // MARK: Brightness and volume
+
+    /// Current brightness or volume, or nil when no transport can read it or the monitor did not answer.
+    public func readControl(_ monitor: ResolvedMonitor, _ control: MonitorControl) -> VcpReading? {
+        let readers = monitor.endpoints.filter { $0.transport.supportsReads }
+        guard !readers.isEmpty else { return nil }
+        for attempt in 1...SwitchService.readAttempts {
+            do {
+                let reading: VcpReading? = try busLock.withLock(timeout: SwitchService.busTimeout) {
+                    for endpoint in readers {
+                        if let reading = endpoint.transport.readVcp(endpoint, code: control.vcpCode) {
+                            return reading
+                        }
+                    }
+                    return nil
+                }
+                if let reading { return reading }
+            } catch {
+                log.debug("Reading \(control.displayName) failed: \(error)")
+            }
+            if attempt < SwitchService.readAttempts { Thread.sleep(forTimeInterval: SwitchService.readRetryDelay) }
+        }
+        return nil
+    }
+
+    /// Sets brightness or volume. A relative change needs the current value: read from the monitor,
+    /// else the last value this app set.
+    public func setControl(_ monitor: ResolvedMonitor, _ control: MonitorControl, _ change: ControlChange) throws -> ControlOutcome {
+        if let capabilities = monitor.capabilities, !capabilities.vcp.isEmpty, !capabilities.supportsVcp(control.vcpCode) {
+            throw DdcError(.unsupportedByTransport, "\(monitor.name) does not list \(control.displayName.lowercased()) control (VCP \(Hex.byte(control.vcpCode))).")
+        }
+        guard let endpoint = monitor.endpoints.first(where: { $0.transport.canSend(SetVcpFrame(sourceAddress: DdcConstants.standardSourceAddress, vcpCode: control.vcpCode, value: 0)) }) else {
+            throw DdcError(.unsupportedByTransport, "No interface that can change \(control.displayName.lowercased()) reaches \(monitor.name).", hint: DdcHints.unsupportedPort)
+        }
+
+        let reading = readControl(monitor, control)
+        let current = reading.map(ControlMath.percent) ?? state.load().monitors[monitor.stableId]?.levels[control.rawValue]
+        guard let percent = change.apply(to: current) else {
+            throw DdcError(.monitorNotResponding, "\(monitor.name) did not report its current \(control.displayName.lowercased()), so it cannot be changed by a step.",
+                           hint: "Choose a value instead, for example 50%. \(DdcHints.ddcCiDisabled)")
+        }
+        let frame = SetVcpFrame(sourceAddress: DdcConstants.standardSourceAddress, vcpCode: control.vcpCode,
+                                value: ControlMath.value(percent: percent, maximum: reading?.maximum ?? 100))
+        try DdcGuard.ensureControlFrame(frame)
+        try busLock.withLock(timeout: SwitchService.busTimeout) {
+            try endpoint.transport.send(endpoint, frame)
+        }
+        log.info("Set \(control.displayName.lowercased()) of \(monitor.name) [\(monitor.stableId)] to \(percent)% (\(change)) via \(endpoint.transport.id): \(frame).")
+
         do {
-            return try busLock.withLock(timeout: SwitchService.busTimeout) {
-                readers.contains { $0.transport.readVcp($0, code: 0x10) != nil }
+            try state.update { s in
+                let m = s.getOrAdd(monitor.stableId)
+                m.identity = monitor.identity
+                m.levels[control.rawValue] = percent
             }
         } catch {
-            log.debug("Read failed: \(error)")
-            return false
+            log.warn("Could not save state after changing \(control.displayName.lowercased()).", error)
         }
+        return ControlOutcome(monitor: monitor, control: control, percent: percent, endpoint: endpoint)
     }
 
     /// Setup wizard only: sends a code that may not be in the profile yet. The code must be one of

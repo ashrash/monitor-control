@@ -88,7 +88,11 @@ sets the quirk `ignoresCommandsWhenInactive`. Then:
 - the setup wizard detects the quirk: the monitor goes quiet during the test and only answers
   again once the user comes back with the monitor's buttons.
 
-To switch back, run Monitor Switcher on the other computer as well.
+To switch back, run Monitor Switcher on the other computer as well. When the two are paired
+(Settings, Other computer), the computer that is not on screen asks the other one to act for it,
+over signed UDP messages; see [spec/peer-protocol.md](../spec/peer-protocol.md). The other
+computer checks each request against its own profiles, so pairing never widens what can be sent
+to the monitor.
 
 ## Files at runtime
 
