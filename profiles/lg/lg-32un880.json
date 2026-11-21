@@ -4,7 +4,7 @@
   "name": "LG UltraFine Ergo 32UN880",
   "match": {
     "manufacturer": "GSM",
-    "productCodes": ["0x774F"],
+    "productCodes": ["0x774F", "0x7750"],
     "capabilitiesModel": "UN880"
   },
   "protocol": "lg-alternative",
