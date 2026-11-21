@@ -59,7 +59,6 @@ jobs:
   macos:
     name: macOS (build, test, package)
     runs-on: macos-latest
-    if: ${{ hashFiles('macos/Package.swift') != '' }}
     defaults:
       run:
         shell: bash
