@@ -1,0 +1,13 @@
+{
+  "description": "Golden DDC/CI Set-VCP packets. The Windows (C#) and macOS (Swift) test suites must both reproduce every payload byte for byte. 'payload' is everything after the source/register byte; the checksum is XOR of 0x6E, the source byte and all payload bytes before it.",
+  "deviceAddress": "0x6E",
+  "vectors": [
+    { "name": "LG alternative: USB-C", "source": "0x50", "vcp": "0xF4", "value": "0x00D1", "payload": "84 03 F4 00 D1 9C" },
+    { "name": "LG alternative: HDMI 2", "source": "0x50", "vcp": "0xF4", "value": "0x0091", "payload": "84 03 F4 00 91 DC" },
+    { "name": "LG alternative: HDMI 1", "source": "0x50", "vcp": "0xF4", "value": "0x0090", "payload": "84 03 F4 00 90 DD" },
+    { "name": "LG alternative: DisplayPort", "source": "0x50", "vcp": "0xF4", "value": "0x00D0", "payload": "84 03 F4 00 D0 9D" },
+    { "name": "Standard MCCS: HDMI 2", "source": "0x51", "vcp": "0x60", "value": "0x0012", "payload": "84 03 60 00 12 CA" },
+    { "name": "Standard MCCS: DisplayPort 1", "source": "0x51", "vcp": "0x60", "value": "0x000F", "payload": "84 03 60 00 0F D7" },
+    { "name": "Standard MCCS: 16-bit value (brightness 0x0132)", "source": "0x51", "vcp": "0x10", "value": "0x0132", "payload": "84 03 10 01 32 9B" }
+  ]
+}

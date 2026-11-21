@@ -1,0 +1,20 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!-- Windows platform layer: monitor enumeration, GPU transports (NvAPI, dxva2, ...), logging.
+       No UI code, and Native-AOT safe so the CLI can use it. -->
+  <PropertyGroup>
+    <TargetFramework>net11.0-windows</TargetFramework>
+    <RootNamespace>MonitorSwitcher.Windows</RootNamespace>
+    <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
+    <IsAotCompatible>true</IsAotCompatible>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\MonitorSwitcher.Core\MonitorSwitcher.Core.csproj" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <InternalsVisibleTo Include="MonitorSwitcher.Tests" />
+  </ItemGroup>
+
+</Project>

@@ -1,0 +1,22 @@
+# .NET
+bin/
+obj/
+*.user
+*.suo
+.vs/
+TestResults/
+publish/
+artifacts/
+
+# macOS / Swift
+.DS_Store
+.build/
+.swiftpm/
+DerivedData/
+xcuserdata/
+macos/dist/
+
+# Editors
+.vscode/
+.idea/
+*.swp

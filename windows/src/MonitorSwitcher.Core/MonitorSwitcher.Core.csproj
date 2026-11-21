@@ -1,0 +1,22 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!-- Platform-neutral core: packets, safety guard, protocols, profiles, switching logic.
+       No OS-specific code lives here, and everything must stay trimming/Native-AOT safe
+       so the command-line tool can be compiled ahead of time. -->
+  <PropertyGroup>
+    <RootNamespace>MonitorSwitcher.Core</RootNamespace>
+    <IsAotCompatible>true</IsAotCompatible>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <!-- Built-in monitor profiles are shared with the macOS app and embedded here. -->
+    <EmbeddedResource Include="..\..\..\profiles\**\*.json" Exclude="..\..\..\profiles\*.schema.json">
+      <LogicalName>MonitorSwitcher.Profiles.%(Filename)%(Extension)</LogicalName>
+    </EmbeddedResource>
+  </ItemGroup>
+
+  <ItemGroup>
+    <InternalsVisibleTo Include="MonitorSwitcher.Tests" />
+  </ItemGroup>
+
+</Project>

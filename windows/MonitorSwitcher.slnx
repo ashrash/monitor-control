@@ -1,0 +1,11 @@
+<Solution>
+  <Folder Name="/src/">
+    <Project Path="src/MonitorSwitcher.Core/MonitorSwitcher.Core.csproj" />
+    <Project Path="src/MonitorSwitcher.Windows/MonitorSwitcher.Windows.csproj" />
+    <Project Path="src/MonitorSwitcher.Cli/MonitorSwitcher.Cli.csproj" />
+    <Project Path="src/MonitorSwitcher.App/MonitorSwitcher.App.csproj" />
+  </Folder>
+  <Folder Name="/tests/">
+    <Project Path="tests/MonitorSwitcher.Tests/MonitorSwitcher.Tests.csproj" />
+  </Folder>
+</Solution>

@@ -1,0 +1,30 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <TargetFramework>net11.0-windows</TargetFramework>
+    <IsPackable>false</IsPackable>
+    <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Microsoft.NET.Test.Sdk" Version="17.14.1" />
+    <PackageReference Include="xunit" Version="2.9.3" />
+    <PackageReference Include="xunit.runner.visualstudio" Version="3.1.5" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <Using Include="Xunit" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\..\src\MonitorSwitcher.Core\MonitorSwitcher.Core.csproj" />
+    <ProjectReference Include="..\..\src\MonitorSwitcher.Windows\MonitorSwitcher.Windows.csproj" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <!-- Shared golden vectors and the raw profile files, so tests check exactly what ships. -->
+    <None Include="..\..\..\spec\packet-vectors.json" Link="spec\packet-vectors.json" CopyToOutputDirectory="PreserveNewest" />
+    <None Include="..\..\..\profiles\**\*.json" Link="profiles\%(RecursiveDir)%(Filename)%(Extension)" CopyToOutputDirectory="PreserveNewest" />
+  </ItemGroup>
+
+</Project>

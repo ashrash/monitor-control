@@ -1,0 +1,25 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!-- Console front end. Published with Native AOT (needs the MSVC build tools, which CI has)
+       and renamed to monitorswitcher.com so it can sit next to the tray app's MonitorSwitcher.exe:
+       Windows runs .com before .exe when you type `monitorswitcher` in a terminal. -->
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net11.0-windows</TargetFramework>
+    <AssemblyName>monitorswitcher</AssemblyName>
+    <RootNamespace>MonitorSwitcher.Cli</RootNamespace>
+    <PublishAot>true</PublishAot>
+    <OptimizationPreference>Size</OptimizationPreference>
+    <UseSystemResourceKeys>true</UseSystemResourceKeys>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\MonitorSwitcher.Windows\MonitorSwitcher.Windows.csproj" />
+  </ItemGroup>
+
+  <!-- After publishing, rename monitorswitcher.exe to monitorswitcher.com (see comment above). -->
+  <Target Name="RenameToCom" AfterTargets="Publish" Condition="'$(RenameToCom)' != 'false'">
+    <Move SourceFiles="$(PublishDir)monitorswitcher.exe" DestinationFiles="$(PublishDir)monitorswitcher.com" />
+  </Target>
+
+</Project>

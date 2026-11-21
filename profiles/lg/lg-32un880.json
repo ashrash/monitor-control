@@ -1,0 +1,21 @@
+{
+  "$schema": "../profile.schema.json",
+  "id": "lg-32un880",
+  "name": "LG UltraFine Ergo 32UN880",
+  "match": {
+    "manufacturer": "GSM",
+    "productCodes": ["0x774F"],
+    "capabilitiesModel": "UN880"
+  },
+  "protocol": "lg-alternative",
+  "inputs": [
+    { "id": "hdmi1", "name": "HDMI 1", "code": "0x90" },
+    { "id": "hdmi2", "name": "HDMI 2", "code": "0x91" },
+    { "id": "dp1", "name": "DisplayPort", "code": "0xD0" },
+    { "id": "usbc", "name": "USB-C", "code": "0xD1", "verified": true }
+  ],
+  "quirks": {
+    "ignoresCommandsWhenInactive": true
+  },
+  "notes": "The standard MCCS input command (VCP 0x60) only blanks the screen briefly on this model, and its capabilities string lists no USB-C input. LG's alternative command (source 0x50, VCP 0xF4) works. While showing one input the monitor ignores DDC/CI on all others, so each computer can only switch away from itself. If the newly selected input has no signal, the monitor returns to an active input after a few seconds. The EDID name is the generic 'LG HDR 4K', so match on product code, not name."
+}

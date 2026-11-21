@@ -1,0 +1,98 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/ashrash/monitor-control/profiles/profile.schema.json",
+  "title": "Monitor Switcher monitor profile",
+  "description": "Describes how to switch inputs on one monitor model. See docs/adding-a-profile.md.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["id", "name", "match", "protocol", "inputs"],
+  "properties": {
+    "$schema": { "type": "string" },
+    "id": {
+      "description": "Unique, lowercase id: <vendor>-<model>, e.g. lg-32un880. Must equal the file name without .json.",
+      "type": "string",
+      "pattern": "^[a-z0-9][a-z0-9-]*$"
+    },
+    "name": { "description": "Human-readable model name.", "type": "string", "minLength": 1 },
+    "match": {
+      "description": "How to recognise the monitor. Product code wins over capabilities model, which wins over EDID model name.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["manufacturer"],
+      "anyOf": [
+        { "required": ["productCodes"] },
+        { "required": ["capabilitiesModel"] },
+        { "required": ["modelNames"] }
+      ],
+      "properties": {
+        "manufacturer": {
+          "description": "Three-letter EDID PNP manufacturer id (GSM = LG, DEL = Dell, SAM = Samsung, ...).",
+          "type": "string",
+          "pattern": "^[A-Z]{3}$"
+        },
+        "productCodes": {
+          "description": "EDID product codes as hex strings, e.g. \"0x774F\". Run `monitorswitcher --list` to see yours.",
+          "type": "array",
+          "items": { "type": "string", "pattern": "^0x[0-9A-Fa-f]{1,4}$" },
+          "minItems": 1
+        },
+        "capabilitiesModel": {
+          "description": "Model token from the DDC/CI capabilities string, e.g. \"UN880\".",
+          "type": "string",
+          "minLength": 1
+        },
+        "modelNames": {
+          "description": "EDID monitor names. Avoid generic names such as \"LG HDR 4K\" that many models share.",
+          "type": "array",
+          "items": { "type": "string", "minLength": 1 },
+          "minItems": 1
+        }
+      }
+    },
+    "protocol": {
+      "description": "Protocol id. Built in: mccs-standard, lg-alternative.",
+      "type": "string",
+      "pattern": "^[a-z0-9][a-z0-9-]*$"
+    },
+    "inputs": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["id", "name", "code"],
+        "properties": {
+          "id": {
+            "description": "Short id used by the CLI and settings: hdmi1, hdmi2, dp1, dp2, usbc, ...",
+            "type": "string",
+            "pattern": "^[a-z0-9][a-z0-9-]*$"
+          },
+          "name": { "description": "Port label as printed on the monitor.", "type": "string", "minLength": 1 },
+          "code": {
+            "description": "Value sent with the protocol's command, as a hex string.",
+            "type": "string",
+            "pattern": "^0x[0-9A-Fa-f]{1,4}$"
+          },
+          "verified": {
+            "description": "true once someone has confirmed this code switches the monitor.",
+            "type": "boolean"
+          }
+        }
+      }
+    },
+    "quirks": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "retries": { "description": "Extra attempts if the transport reports a failure.", "type": "integer", "minimum": 0, "maximum": 5 },
+        "retryDelayMs": { "type": "integer", "minimum": 0, "maximum": 5000 },
+        "postSwitchDelayMs": { "description": "Pause after a switch before the next command.", "type": "integer", "minimum": 0, "maximum": 5000 },
+        "ignoresCommandsWhenInactive": {
+          "description": "true if the monitor ignores DDC/CI arriving on an input it isn't showing, so a computer can switch away from itself but not back.",
+          "type": "boolean"
+        }
+      }
+    },
+    "notes": { "description": "Free-form notes for contributors.", "type": "string" }
+  }
+}
