@@ -1,0 +1,15 @@
+.build/
+dist/
+.swiftpm/
+*.xcodeproj/xcuserdata/
+*.xcodeproj/project.xcworkspace/xcuserdata/
+*.xcworkspace/xcuserdata/
+DerivedData/
+.DS_Store
+
+# Filled by scripts/sync-shared.sh from ../profiles and ../spec; only the README placeholders are committed
+# (SwiftPM needs the resource folders to exist).
+Sources/MonitorSwitcherCore/Resources/profiles/*
+!Sources/MonitorSwitcherCore/Resources/profiles/README.md
+Tests/MonitorSwitcherCoreTests/Resources/spec/*
+!Tests/MonitorSwitcherCoreTests/Resources/spec/README.md

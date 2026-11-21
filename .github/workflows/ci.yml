@@ -71,7 +71,7 @@ jobs:
         run: swift --version && xcodebuild -version
 
       - name: Sync shared profiles and test vectors
-        run: ./scripts/sync-shared.sh
+        run: bash scripts/sync-shared.sh
 
       # Compiler errors are turned into annotations so they show up on the commit.
       - name: Build
@@ -85,7 +85,7 @@ jobs:
           swift test 2>&1 | sed -E "s#^${GITHUB_WORKSPACE}/##; s#^(macos/[^:]+):([0-9]+):([0-9]+): error: (.*)\$#::error file=\1,line=\2,col=\3::\4#"
 
       - name: Build app bundle
-        run: ./scripts/build-app.sh
+        run: bash scripts/build-app.sh
 
       - uses: actions/upload-artifact@v4
         with:
