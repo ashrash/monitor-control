@@ -21,9 +21,21 @@ public class ProfileMatchingTests
     }
 
     [Fact]
+    public void Mac_connection_product_code_matches_by_product_code()
+    {
+        // Over USB-C/DP to a Mac the same 32UN880 reports 0x7750 instead of 0x774F.
+        var viaMac = TestData.Lg32Un880 with { ProductCode = 0x7750 };
+
+        var match = TestData.BuiltInCatalog().Resolve(viaMac, null);
+
+        Assert.Equal("lg-32un880", match.Profile.Id);
+        Assert.Equal(MatchQuality.ProductCode, match.Quality);
+    }
+
+    [Fact]
     public void Sibling_model_matches_by_capabilities_model_when_product_code_differs()
     {
-        var sibling = TestData.Lg32Un880 with { ProductCode = 0x7750 };
+        var sibling = TestData.Lg32Un880 with { ProductCode = 0x7700 };
         var caps = CapabilitiesParser.Parse(TestData.Lg32Un880Capabilities);
 
         var match = TestData.BuiltInCatalog().Resolve(sibling, caps);
