@@ -21,13 +21,13 @@
     <TieredPGO>true</TieredPGO>
     <UseSystemResourceKeys>true</UseSystemResourceKeys>
 
-    <!-- Single-file publish. Measured on the reference machine (window visible / idle private memory):
-           framework-dependent:  dotnet publish -c Release -r win-x64 --self-contained false
-             0.5 MB exe, ~0.35 s, ~12 MB (needs the .NET Desktop Runtime)
-           standalone:           dotnet publish -c Release -r win-x64 --self-contained true -p:PublishReadyToRun=true
-             131 MB exe, ~0.2 s, ~15 MB
-         Notes: don't enable EnableCompressionInSingleFile (assemblies get unpacked into RAM: 86 MB),
-         and don't combine ReadyToRun with a framework-dependent single file (crashes at startup on .NET 11.0.0). -->
+    <!-- Single-file publish (exact commands are in .github/workflows/ci.yml). Measured on the reference
+         machine, as window visible / idle private memory:
+           framework-dependent (SelfContained=false): 0.5 MB exe, ~0.35 s, ~12 MB, needs the .NET Desktop Runtime
+           standalone (SelfContained=true, PublishReadyToRun=true): 131 MB exe, ~0.2 s, ~15 MB
+         Don't enable EnableCompressionInSingleFile (assemblies get unpacked into RAM: 86 MB), and don't
+         combine ReadyToRun with a framework-dependent single file (crashes at startup on .NET 11.0.0).
+         Note for editors: XML comments may not contain two hyphens in a row. -->
     <PublishSingleFile>true</PublishSingleFile>
     <IncludeNativeLibrariesForSelfExtract>true</IncludeNativeLibrariesForSelfExtract>
     <PublishReadyToRun>false</PublishReadyToRun>
