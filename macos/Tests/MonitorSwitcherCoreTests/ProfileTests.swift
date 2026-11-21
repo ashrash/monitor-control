@@ -11,9 +11,18 @@ final class ProfileMatchingTests: XCTestCase {
         XCTAssertEqual(match.profile.findInput("usbc")?.code, "0xD1")
     }
 
+    func testMacConnectionProductCodeMatchesByProductCode() {
+        // Over USB-C/DP to a Mac the same 32UN880 reports 0x7750 instead of 0x774F.
+        var viaMac = TestData.lg32un880
+        viaMac.productCode = 0x7750
+        let match = TestData.builtInCatalog().resolve(viaMac, nil)
+        XCTAssertEqual(match.profile.id, "lg-32un880")
+        XCTAssertEqual(match.quality, .productCode)
+    }
+
     func testSiblingModelMatchesByCapabilitiesModel() {
         var sibling = TestData.lg32un880
-        sibling.productCode = 0x7750
+        sibling.productCode = 0x7700
         let match = TestData.builtInCatalog().resolve(sibling, CapabilitiesParser.parse(TestData.lg32un880Capabilities))
         XCTAssertEqual(match.profile.id, "lg-32un880")
         XCTAssertEqual(match.quality, .capabilitiesModel)

@@ -239,8 +239,7 @@ struct SettingsView: View {
             }
             .padding(16)
         }
-        .frame(width: 600)
-        .frame(minHeight: 420)
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
     }
 
     private var monitorSection: some View {
